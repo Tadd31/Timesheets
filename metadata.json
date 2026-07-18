@@ -1,0 +1,6 @@
+{
+  "name": "Timesheet Recorder",
+  "description": "A minimalist, offline-first timesheet and project tracking application inspired by Notion, with dark mode, project estimations, reports, and office humor.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
