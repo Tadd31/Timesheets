@@ -66,8 +66,11 @@ export default function App() {
   const [isDarkMode, setIsDarkMode] = useState<boolean>(true);
   const [activeTab, setActiveTab] = useState<'timesheet' | 'projects' | 'reports'>('timesheet');
   const [selectedDate, setSelectedDate] = useState<string>(() => {
-    // Current date context: 2026-07-17
-    return '2026-07-17';
+    const today = new Date();
+    const yyyy = today.getFullYear();
+    const mm = String(today.getMonth() + 1).padStart(2, '0');
+    const dd = String(today.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
   });
   const [lastDeletedEntry, setLastDeletedEntry] = useState<TimeEntry | null>(null);
   const [showToast, setShowToast] = useState<boolean>(false);
@@ -81,6 +84,7 @@ export default function App() {
   const [syncingState, setSyncingState] = useState<'idle' | 'syncing' | 'synced' | 'error'>('idle');
   const [sheetsUrl, setSheetsUrl] = useState<string | null>(null);
   const [showSyncPanel, setShowSyncPanel] = useState<boolean>(false);
+  const [showSyncInfoModal, setShowSyncInfoModal] = useState<boolean>(false);
 
   // Initialize spreadsheet connections
   const initializeSpreadsheet = async (token: string, userObj?: User) => {
@@ -429,9 +433,94 @@ export default function App() {
       <div className="h-32 sm:h-40 w-full bg-gradient-to-r from-zinc-200 via-zinc-100 to-zinc-300 dark:from-[#252525] dark:via-[#1F1F1F] dark:to-[#252525] border-b border-zinc-200/60 dark:border-[#2F2F2F] relative overflow-hidden print:hidden">
         {/* Subtle grid accent */}
         <div className="absolute inset-0 bg-grid-black/[0.02] dark:bg-grid-white/[0.01]" />
-        {/* Witty watermark */}
-        <div className="absolute bottom-3 right-5 text-[10px] font-mono text-zinc-400 dark:text-zinc-650 uppercase tracking-widest pointer-events-none select-none">
-          Draft #12 • Revision Pending Approval
+        
+        {/* Controls Area (moved here from header below) */}
+        <div className="absolute bottom-3 right-4 sm:right-6 flex items-center space-x-2 sm:space-x-3 z-20">
+          {/* Offline Mode Indicator Badge */}
+          <button
+            onClick={() => setShowOfflineModal(true)}
+            className="group flex items-center space-x-1.5 text-[10px] sm:text-[11px] font-mono px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-lg bg-emerald-50/90 dark:bg-emerald-950/45 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 border border-emerald-200/80 dark:border-emerald-800/80 text-emerald-800 dark:text-emerald-400 cursor-pointer transition-all hover:scale-105 active:scale-95 shadow-sm"
+            title="Click to learn about Offline Mode"
+          >
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+            <span className="hidden xs:inline">Offline Mode</span>
+            <span className="xs:hidden">Offline</span>
+            <Info className="w-3 h-3 text-emerald-600/70 dark:text-emerald-400/70 group-hover:text-emerald-750 dark:group-hover:text-emerald-350 transition-colors" />
+          </button>
+
+          {/* Google Sheets Sync Controller */}
+          <div className="flex items-center space-x-1">
+            {googleUser === null ? (
+              <button
+                onClick={handleGoogleLogin}
+                className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg border border-zinc-250 dark:border-[#2F2F2F]/85 bg-white/95 dark:bg-[#1A1A1A]/95 hover:bg-zinc-50 dark:hover:bg-[#252525] text-zinc-700 dark:text-[#E0E0E0] cursor-pointer text-[11px] sm:text-xs font-mono font-bold transition-all hover:scale-105 active:scale-95 shadow-sm"
+                title="Connect your Google Account to sync timesheets directly to Google Sheets"
+              >
+                <Database className="w-3.5 h-3.5 text-blue-500 animate-pulse" />
+                <span className="hidden sm:inline">Sync Google Sheets</span>
+                <span className="sm:hidden">Sync</span>
+              </button>
+            ) : (
+              <div className="flex items-center space-x-1">
+                {/* Spreadsheet Quick Link */}
+                {sheetsUrl && (
+                  <a
+                    href={sheetsUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="p-1.5 rounded-lg border border-zinc-250 dark:border-[#2F2F2F]/85 hover:bg-zinc-100 dark:hover:bg-[#2F2F2F] bg-white/95 dark:bg-[#1A1A1A]/95 text-zinc-500 dark:text-gray-400 cursor-pointer transition-colors shadow-sm"
+                    title="Open Database in Google Sheets"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5 text-emerald-500" />
+                  </a>
+                )}
+
+                {/* Sync Status Badge */}
+                <button
+                  onClick={() => setShowSyncPanel(true)}
+                  className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg border text-[11px] sm:text-xs font-mono font-bold cursor-pointer transition-all hover:scale-105 active:scale-95 shadow-sm ${
+                    syncingState === 'syncing'
+                      ? 'bg-amber-50/95 dark:bg-amber-950/40 border-amber-200 dark:border-amber-800 text-amber-700 dark:text-amber-400'
+                      : syncingState === 'error'
+                      ? 'bg-rose-50/95 dark:bg-rose-950/40 border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-400'
+                      : 'bg-emerald-50/95 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-400'
+                  }`}
+                >
+                  {syncingState === 'syncing' ? (
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  ) : syncingState === 'error' ? (
+                    <AlertCircle className="w-3.5 h-3.5" />
+                  ) : (
+                    <Database className="w-3.5 h-3.5 text-emerald-500" />
+                  )}
+                  <span className="hidden sm:inline">
+                    {syncingState === 'syncing' ? 'Syncing...' : syncingState === 'error' ? 'Sync Error' : 'Synced'}
+                  </span>
+                  <span className="sm:hidden">
+                    {syncingState === 'syncing' ? 'Syncing' : syncingState === 'error' ? 'Error' : 'Synced'}
+                  </span>
+                </button>
+              </div>
+            )}
+
+            {/* Explanation I-Icon for the sync option */}
+            <button
+              onClick={() => setShowSyncInfoModal(true)}
+              className="p-1.5 rounded-lg border border-zinc-250 dark:border-[#2F2F2F]/85 hover:bg-zinc-100 dark:hover:bg-[#2D2D2D] bg-white/95 dark:bg-[#1A1A1A]/95 text-zinc-500 dark:text-zinc-450 cursor-pointer transition-colors shadow-sm"
+              title="How does Google Sheets Sync work?"
+            >
+              <Info className="w-3.5 h-3.5 text-blue-500" />
+            </button>
+          </div>
+
+          {/* Theme Selector (Dark mode switcher) */}
+          <button
+            onClick={toggleDarkMode}
+            className="p-1.5 rounded-lg border border-zinc-250 dark:border-[#2F2F2F]/85 hover:bg-zinc-100 dark:hover:bg-[#2F2F2F] bg-white/95 dark:bg-[#1A1A1A]/95 text-zinc-500 dark:text-gray-400 cursor-pointer transition-colors shadow-sm"
+            title={isDarkMode ? "Enable Caffeine Light Mode" : "Enable Dark Mode"}
+          >
+            {isDarkMode ? <Sun className="w-4 h-4 text-amber-500" /> : <Moon className="w-4 h-4 text-zinc-600" />}
+          </button>
         </div>
       </div>
 
@@ -445,89 +534,16 @@ export default function App() {
             <div className="text-5xl sm:text-6xl p-3 bg-white dark:bg-[#1F1F1F] rounded-2xl border border-zinc-200/80 dark:border-[#2F2F2F] shadow-md select-none transform hover:scale-105 transition-transform">
               🗄️
             </div>
-
-            {/* Controls Bar */}
-            <div className="flex items-center space-x-2 pb-1">
-              {googleUser === null ? (
-                <button
-                  onClick={handleGoogleLogin}
-                  className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg border border-zinc-200 dark:border-[#2F2F2F] bg-white dark:bg-[#1A1A1A] hover:bg-zinc-50 dark:hover:bg-[#252525] text-zinc-700 dark:text-[#E0E0E0] cursor-pointer text-xs font-mono font-bold transition-all hover:scale-105 active:scale-95 shadow-sm"
-                  title="Connect your Google Account to sync timesheets directly to Google Sheets"
-                >
-                  <Database className="w-3.5 h-3.5 text-blue-500" />
-                  <span className="hidden sm:inline">Sync Google Sheets</span>
-                  <span className="sm:hidden">Sync</span>
-                </button>
-              ) : (
-                <div className="flex items-center space-x-2">
-                  {/* Spreadsheet Quick Link */}
-                  {sheetsUrl && (
-                    <a
-                      href={sheetsUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="p-2 rounded-lg border border-zinc-200 dark:border-[#2F2F2F] hover:bg-zinc-100 dark:hover:bg-[#2F2F2F] bg-white dark:bg-[#1A1A1A] text-zinc-500 dark:text-gray-400 cursor-pointer transition-colors shadow-sm"
-                      title="Open Database in Google Sheets"
-                    >
-                      <ExternalLink className="w-4 h-4 text-emerald-500 animate-pulse" />
-                    </a>
-                  )}
-
-                  {/* Sync Status Badge */}
-                  <button
-                    onClick={() => setShowSyncPanel(true)}
-                    className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg border text-xs font-mono font-bold cursor-pointer transition-all hover:scale-105 active:scale-95 shadow-sm ${
-                      syncingState === 'syncing'
-                        ? 'bg-amber-50/80 dark:bg-amber-950/20 border-amber-200 dark:border-amber-800 text-amber-700 dark:text-amber-400'
-                        : syncingState === 'error'
-                        ? 'bg-rose-50/80 dark:bg-rose-950/20 border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-400'
-                        : 'bg-emerald-50/80 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-400'
-                    }`}
-                  >
-                    {syncingState === 'syncing' ? (
-                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                    ) : syncingState === 'error' ? (
-                      <AlertCircle className="w-3.5 h-3.5" />
-                    ) : (
-                      <Database className="w-3.5 h-3.5" />
-                    )}
-                    <span className="hidden sm:inline">
-                      {syncingState === 'syncing' ? 'Syncing...' : syncingState === 'error' ? 'Sync Error' : 'Google Sheets Active'}
-                    </span>
-                    <span className="sm:hidden">
-                      {syncingState === 'syncing' ? 'Syncing' : syncingState === 'error' ? 'Error' : 'Synced'}
-                    </span>
-                  </button>
-                </div>
-              )}
-
-              {/* Dark mode switcher */}
-              <button
-                onClick={toggleDarkMode}
-                className="p-2 rounded-lg border border-zinc-200 dark:border-[#2F2F2F] hover:bg-zinc-100 dark:hover:bg-[#2F2F2F] bg-white dark:bg-[#1A1A1A] text-zinc-500 dark:text-gray-400 cursor-pointer transition-colors shadow-sm"
-                title={isDarkMode ? "Enable Caffeine Light Mode" : "Enable Dark Mode"}
-              >
-                {isDarkMode ? <Sun className="w-4 h-4 text-amber-500" /> : <Moon className="w-4 h-4 text-zinc-600" />}
-              </button>
-            </div>
           </div>
 
-          {/* App description and header info */}
-          <div className="space-y-1.5 pt-2">
-            <div className="flex items-center space-x-2">
-              <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-zinc-950 dark:text-white font-mono">
-                Timesheet Recorder
-              </h1>
-              <button
-                onClick={() => setShowOfflineModal(true)}
-                className="group flex items-center space-x-1.5 text-[10px] font-mono px-2.5 py-1 rounded-full bg-emerald-50 dark:bg-emerald-950/20 hover:bg-emerald-100 dark:hover:bg-emerald-900/30 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-400 cursor-pointer transition-all hover:scale-105 active:scale-95"
-                title="Click to learn about Offline Mode"
-              >
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                <span>Offline Mode Active</span>
-                <Info className="w-3 h-3 text-emerald-500/70 group-hover:text-emerald-600 dark:group-hover:text-emerald-400 transition-colors" />
-              </button>
-            </div>
+          {/* App description and header info - now with MORE SPACE for title */}
+          <div className="space-y-1.5 pt-4">
+            <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight text-zinc-950 dark:text-white font-mono">
+              Timesheet Recorder
+            </h1>
+            <p className="text-xs sm:text-sm text-zinc-500 dark:text-zinc-400 leading-relaxed font-mono max-w-2xl">
+              Your high-precision logs companion
+            </p>
           </div>
 
           {/* Navigation Tabs (Notion style simple bottom border lines) */}
@@ -536,8 +552,8 @@ export default function App() {
               onClick={() => setActiveTab('timesheet')}
               className={`flex items-center space-x-1.5 px-4 py-2 text-xs font-mono font-bold border-b-2 -mb-px transition-all cursor-pointer rounded-t-lg ${
                 activeTab === 'timesheet'
-                  ? 'border-blue-600 dark:border-blue-400 text-blue-600 dark:text-blue-400 bg-blue-50/50 dark:bg-blue-950/20'
-                  : 'border-transparent text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-300 hover:bg-zinc-100/30 dark:hover:bg-zinc-800/20'
+                  ? 'border-orange-500 dark:border-orange-400 text-orange-600 dark:text-orange-400 bg-orange-50/50 dark:bg-orange-950/20 hover:bg-orange-100/40 dark:hover:bg-orange-950/30'
+                  : 'border-transparent text-zinc-400 hover:text-orange-600 dark:hover:text-orange-400 hover:bg-orange-50/30 dark:hover:bg-orange-950/10'
               }`}
             >
               <Clock className="w-3.5 h-3.5" />
@@ -548,8 +564,8 @@ export default function App() {
               onClick={() => setActiveTab('projects')}
               className={`flex items-center space-x-1.5 px-4 py-2 text-xs font-mono font-bold border-b-2 -mb-px transition-all cursor-pointer rounded-t-lg ${
                 activeTab === 'projects'
-                  ? 'border-emerald-600 dark:border-emerald-400 text-emerald-600 dark:text-emerald-400 bg-emerald-50/50 dark:bg-emerald-950/20'
-                  : 'border-transparent text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-300 hover:bg-zinc-100/30 dark:hover:bg-zinc-800/20'
+                  ? 'border-emerald-600 dark:border-emerald-400 text-emerald-600 dark:text-emerald-400 bg-emerald-50/50 dark:bg-emerald-950/20 hover:bg-emerald-100/40 dark:hover:bg-emerald-950/30'
+                  : 'border-transparent text-zinc-400 hover:text-emerald-600 dark:hover:text-emerald-400 hover:bg-emerald-50/30 dark:hover:bg-emerald-950/10'
               }`}
             >
               <FolderOpen className="w-3.5 h-3.5" />
@@ -560,8 +576,8 @@ export default function App() {
               onClick={() => setActiveTab('reports')}
               className={`flex items-center space-x-1.5 px-4 py-2 text-xs font-mono font-bold border-b-2 -mb-px transition-all cursor-pointer rounded-t-lg ${
                 activeTab === 'reports'
-                  ? 'border-purple-600 dark:border-purple-400 text-purple-600 dark:text-purple-400 bg-purple-50/50 dark:bg-purple-950/20'
-                  : 'border-transparent text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-300 hover:bg-zinc-100/30 dark:hover:bg-zinc-800/20'
+                  ? 'border-purple-600 dark:border-purple-400 text-purple-600 dark:text-purple-400 bg-purple-50/50 dark:bg-purple-950/20 hover:bg-purple-100/40 dark:hover:bg-purple-950/30'
+                  : 'border-transparent text-zinc-400 hover:text-purple-600 dark:hover:text-purple-400 hover:bg-purple-50/30 dark:hover:bg-purple-950/10'
               }`}
             >
               <FileSpreadsheet className="w-3.5 h-3.5" />
@@ -619,6 +635,7 @@ export default function App() {
                     onDeleteEntry={handleDeleteEntry}
                     onEditEntry={handleEditEntry}
                     selectedDate={selectedDate}
+                    setSelectedDate={setSelectedDate}
                   />
                 </div>
               </div>
@@ -648,7 +665,7 @@ export default function App() {
         </main>
 
         {/* Daily humor quotes & caffeine tracker moved here to bottom */}
-        {activeTab !== 'reports' && (
+        {activeTab === 'timesheet' && (
           <div className="mt-12 print:hidden">
             <HumorBanner />
           </div>
@@ -663,8 +680,9 @@ export default function App() {
             "Disclaimer: Logging hours does not guarantee promotion. Any similarity between recorded tasks and actual productive output is strictly coincidental. Powered by caffeine, temporary variables, and corporate anxiety."
           </p>
         </footer>
+      </div>
 
-        {/* Undo Toast Notification */}
+      {/* Undo Toast Notification */}
         <AnimatePresence>
           {showToast && lastDeletedEntry && (
             <motion.div
@@ -716,7 +734,7 @@ export default function App() {
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
                 onClick={() => setShowOfflineModal(false)}
-                className="absolute inset-0 bg-zinc-950/45 dark:bg-black/60 backdrop-blur-sm"
+                className="absolute inset-0 bg-zinc-950/60 dark:bg-black/75 backdrop-blur-md"
               />
 
               {/* Modal Content Card */}
@@ -811,7 +829,7 @@ export default function App() {
                       <h5 className="font-bold font-mono text-[10px] uppercase tracking-wider">Compliance Advisory</h5>
                     </div>
                     <p className="text-[10.5px] text-amber-700/85 dark:text-amber-400/85 leading-relaxed">
-                      Clearing your browser's site cookies or application storage cache will wipe your saved timesheets. Remember to print or capture your **Weekly Reports** regularly to preserve evidence of your diligent corporate service.
+                      Clearing your browser's site cookies or application storage cache will wipe your saved timesheets. To prevent data loss, we strongly recommend syncing your account with <strong className="text-amber-800 dark:text-amber-300">Google Sheets</strong> to back up your records in real-time. You can also print or capture your <strong className="text-amber-800 dark:text-amber-300">Weekly Reports</strong> regularly to preserve evidence of your corporate service.
                     </p>
                   </div>
                 </div>
@@ -833,7 +851,7 @@ export default function App() {
         {/* Google Sheets Sync Panel Modal */}
         <AnimatePresence>
           {showSyncPanel && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/45 backdrop-blur-xs print:hidden">
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-zinc-950/60 dark:bg-black/75 backdrop-blur-md print:hidden">
               <motion.div
                 initial={{ opacity: 0, scale: 0.95, y: 10 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -985,7 +1003,120 @@ export default function App() {
           )}
         </AnimatePresence>
 
-      </div>
+        {/* Google Sheets Sync Information Modal */}
+        <AnimatePresence>
+          {showSyncInfoModal && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-zinc-950/60 dark:bg-black/75 backdrop-blur-md print:hidden">
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 10 }}
+                transition={{ duration: 0.2 }}
+                className="w-full max-w-lg p-6 bg-white dark:bg-[#1C1C1C] rounded-2xl border border-zinc-200/80 dark:border-[#2F2F2F] shadow-2xl space-y-5 overflow-y-auto max-h-[90vh]"
+              >
+                {/* Modal Title Header */}
+                <div className="flex items-center justify-between border-b border-zinc-150 dark:border-[#2D2D2D] pb-3">
+                  <div className="flex items-center space-x-2.5">
+                    <div className="p-2 rounded-xl bg-blue-50 dark:bg-blue-950/20 text-blue-600 dark:text-blue-400 border border-blue-100 dark:border-blue-900/10">
+                      <FileSpreadsheet className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h3 className="font-bold text-sm text-zinc-950 dark:text-white font-mono">
+                        Google Sheets Cloud Sync
+                      </h3>
+                      <p className="text-[11px] text-zinc-500 dark:text-zinc-400 font-mono">
+                        How your cloud database works
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setShowSyncInfoModal(false)}
+                    className="p-1.5 rounded-lg text-zinc-400 hover:text-zinc-650 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-[#252525] transition-colors cursor-pointer"
+                    title="Close Info Panel"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+                {/* Explanation Details */}
+                <div className="space-y-4 text-xs">
+                  <div className="space-y-3.5">
+                    {/* Item 1 */}
+                    <div className="flex gap-3">
+                      <div className="p-1.5 h-fit rounded-lg bg-indigo-50 dark:bg-indigo-950/20 text-indigo-500 border border-indigo-100 dark:border-indigo-900/15 mt-0.5">
+                        <Database className="w-4 h-4" />
+                      </div>
+                      <div className="space-y-0.5">
+                        <h4 className="font-bold font-mono text-zinc-900 dark:text-zinc-100">
+                          Secure Cloud Integration
+                        </h4>
+                        <p className="text-zinc-500 dark:text-zinc-400 leading-relaxed">
+                          By linking your Google account, the app automatically provisions a spreadsheet called <span className="font-bold text-zinc-750 dark:text-zinc-350">"Timesheet Recorder Database"</span> directly inside your Google Drive. No server hosts your records; everything stays securely in your personal Google account.
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Item 2 */}
+                    <div className="flex gap-3">
+                      <div className="p-1.5 h-fit rounded-lg bg-emerald-50 dark:bg-emerald-950/20 text-emerald-500 border border-emerald-100 dark:border-emerald-900/15 mt-0.5">
+                        <ShieldCheck className="w-4 h-4" />
+                      </div>
+                      <div className="space-y-0.5">
+                        <h4 className="font-bold font-mono text-zinc-900 dark:text-zinc-100">
+                          Offline-First Protection
+                        </h4>
+                        <p className="text-zinc-500 dark:text-zinc-400 leading-relaxed">
+                          Your records continue to save instantly inside your web browser's local cache. If your internet drops or you are working in remote spots, the app operates uninterrupted.
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Item 3 */}
+                    <div className="flex gap-3">
+                      <div className="p-1.5 h-fit rounded-lg bg-amber-50 dark:bg-amber-950/20 text-amber-500 border border-amber-100 dark:border-amber-900/15 mt-0.5">
+                        <RefreshCw className="w-4 h-4" />
+                      </div>
+                      <div className="space-y-0.5">
+                        <h4 className="font-bold font-mono text-zinc-900 dark:text-zinc-100">
+                          Live Real-time Syncing
+                        </h4>
+                        <p className="text-zinc-500 dark:text-zinc-400 leading-relaxed">
+                          Whenever you add a timesheet, create a new project, or log cup counts, the app debounces and pushes updates up to Google Sheets within 1.5 seconds. Changes synchronize smoothly.
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Item 4 */}
+                    <div className="flex gap-3">
+                      <div className="p-1.5 h-fit rounded-lg bg-purple-50 dark:bg-purple-950/20 text-purple-500 border border-purple-100 dark:border-purple-900/15 mt-0.5">
+                        <Sparkles className="w-4 h-4" />
+                      </div>
+                      <div className="space-y-0.5">
+                        <h4 className="font-bold font-mono text-zinc-900 dark:text-zinc-100">
+                          Cross-Device Restore
+                        </h4>
+                        <p className="text-zinc-500 dark:text-zinc-400 leading-relaxed">
+                          Switched browsers or cleared your cookies? Simply log in with Google, open the Sync Panel status badge, and select <span className="font-bold text-zinc-750 dark:text-zinc-350">"Force Restore"</span>. This grabs all records from your Drive sheet and fully restores your workspace in a single click!
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Footer buttons */}
+                <div className="flex items-center justify-end border-t border-zinc-150 dark:border-[#2D2D2D] pt-3 text-xs">
+                  <button
+                    onClick={() => setShowSyncInfoModal(false)}
+                    className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold font-mono text-[11px] rounded-lg cursor-pointer transition-all active:scale-95 shadow-sm"
+                  >
+                    Understood
+                  </button>
+                </div>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
+
     </div>
   );
 }

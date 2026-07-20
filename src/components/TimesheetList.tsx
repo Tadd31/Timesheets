@@ -14,9 +14,10 @@ interface TimesheetListProps {
   onDeleteEntry: (entryId: string) => void;
   onEditEntry: (entry: TimeEntry) => void;
   selectedDate: string;
+  setSelectedDate: (date: string) => void;
 }
 
-export default function TimesheetList({ entries, projects, onDeleteEntry, onEditEntry, selectedDate }: TimesheetListProps) {
+export default function TimesheetList({ entries, projects, onDeleteEntry, onEditEntry, selectedDate, setSelectedDate }: TimesheetListProps) {
   const [filterProjectId, setFilterProjectId] = useState<string>('all');
   const [viewScope, setViewScope] = useState<'day' | 'all'>('all');
   const [allTags, setAllTags] = useState<Tag[]>([]);
@@ -135,7 +136,7 @@ export default function TimesheetList({ entries, projects, onDeleteEntry, onEdit
                   : 'text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-300'
               }`}
             >
-              Selected Day ({selectedDate})
+              Selected Day Filter
             </button>
             <button
               onClick={() => setViewScope('all')}
@@ -148,6 +149,22 @@ export default function TimesheetList({ entries, projects, onDeleteEntry, onEdit
               All Recorded History
             </button>
           </div>
+
+          {viewScope === 'day' && (
+            <div className="relative flex items-center bg-zinc-50 dark:bg-[#191919] rounded-lg border border-zinc-200 dark:border-[#2F2F2F] px-2.5 py-1 text-xs font-mono animate-in fade-in slide-in-from-left-2 duration-200">
+              <span className="text-zinc-400 dark:text-zinc-500 mr-1.5 font-bold uppercase text-[9px] tracking-wider shrink-0">Date:</span>
+              <input
+                type="date"
+                value={selectedDate}
+                onChange={e => {
+                  setSelectedDate(e.target.value);
+                  setViewScope('day');
+                }}
+                className="bg-transparent border-none text-zinc-700 dark:text-[#E0E0E0] text-xs font-mono focus:outline-none cursor-pointer w-[120px]"
+              />
+              <Calendar className="w-3.5 h-3.5 text-zinc-400 pointer-events-none ml-1 shrink-0" />
+            </div>
+          )}
 
           {/* Project dropdown filter */}
           <select

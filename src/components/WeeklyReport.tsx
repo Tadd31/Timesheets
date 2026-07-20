@@ -331,22 +331,6 @@ export default function WeeklyReport({ entries, projects }: WeeklyReportProps) {
           </div>
         </div>
 
-        {/* Weekly Evaluation Widget */}
-        <div className="p-4 rounded-xl bg-zinc-50 dark:bg-[#252525] border border-zinc-100 dark:border-[#2F2F2F] grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="md:col-span-2 space-y-1">
-            <div className="flex items-center space-x-1.5 text-zinc-500">
-              <Sparkles className="w-3.5 h-3.5 text-amber-500" />
-              <span className="text-[10px] uppercase tracking-wider font-mono font-bold">Auditor Review</span>
-            </div>
-            <h3 className="text-sm font-bold text-zinc-850 dark:text-zinc-100 font-mono">{review.title}</h3>
-            <p className="text-xs text-zinc-500 dark:text-gray-400 italic">"{review.desc}"</p>
-          </div>
-          <div className="flex flex-col justify-center border-t md:border-t-0 md:border-l border-zinc-200 dark:border-[#2F2F2F] pt-3 md:pt-0 md:pl-4 font-mono space-y-0.5">
-            <span className="text-[10px] text-zinc-400">Performance Index</span>
-            <span className="text-xs font-bold text-zinc-880 dark:text-[#E0E0E0]">{review.rating}</span>
-          </div>
-        </div>
-
         {/* Key Metrics Columns */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 py-2">
           <div className="p-3 border border-zinc-150 dark:border-[#2F2F2F] rounded-lg space-y-1 bg-zinc-50/10 dark:bg-zinc-950/10">
@@ -495,6 +479,22 @@ export default function WeeklyReport({ entries, projects }: WeeklyReportProps) {
                   <span className="text-[8px] uppercase text-zinc-400">Annual</span>
                   <p className="text-xs font-bold text-amber-600 dark:text-amber-500">{totalAnnualCoffees} cups</p>
                 </div>
+              </div>
+            </div>
+
+            {/* Auditor Review Panel (Moved here) */}
+            <div className="p-4 rounded-xl bg-zinc-50 dark:bg-[#252525] border border-zinc-150/70 dark:border-[#2F2F2F] space-y-3 shadow-xs">
+              <div className="space-y-1">
+                <div className="flex items-center space-x-1.5 text-zinc-500">
+                  <Sparkles className="w-3.5 h-3.5 text-amber-500 animate-pulse" />
+                  <span className="text-[10px] uppercase tracking-wider font-mono font-bold">Auditor Review</span>
+                </div>
+                <h3 className="text-sm font-bold text-zinc-850 dark:text-zinc-100 font-mono">{review.title}</h3>
+                <p className="text-xs text-zinc-500 dark:text-gray-400 italic">"{review.desc}"</p>
+              </div>
+              <div className="border-t border-zinc-200/60 dark:border-[#2F2F2F] pt-2.5 font-mono space-y-0.5">
+                <span className="text-[10px] text-zinc-400 block">Performance Index</span>
+                <span className="text-xs font-bold text-zinc-800 dark:text-zinc-300">{review.rating}</span>
               </div>
             </div>
           </div>

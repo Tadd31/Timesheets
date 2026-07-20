@@ -19,7 +19,7 @@ interface TimesheetFormProps {
 export default function TimesheetForm({ projects, onAddEntry, selectedDate, setSelectedDate }: TimesheetFormProps) {
   const [projectId, setProjectId] = useState(projects[0]?.id || '');
   const [hours, setHours] = useState(''); // Initialized to empty as requested
-  const [coffees, setCoffees] = useState('2');
+  const [coffees, setCoffees] = useState('');
   const [comment, setComment] = useState('');
   const [error, setError] = useState('');
   const [success, setSuccess] = useState(false);
@@ -178,11 +178,6 @@ export default function TimesheetForm({ projects, onAddEntry, selectedDate, setS
       return;
     }
 
-    if (!coffees.trim()) {
-      setError('Coffee consumed field cannot be empty.');
-      return;
-    }
-
     if (!comment.trim()) {
       setError('Accomplishment description is mandatory.');
       return;
@@ -199,7 +194,7 @@ export default function TimesheetForm({ projects, onAddEntry, selectedDate, setS
       return;
     }
 
-    const numericCoffees = parseInt(coffees, 10);
+    const numericCoffees = coffees.trim() === '' ? 0 : parseInt(coffees, 10);
     if (isNaN(numericCoffees) || numericCoffees < 0) {
       setError('Coffee consumed must be a non-negative integer.');
       return;
@@ -228,6 +223,7 @@ export default function TimesheetForm({ projects, onAddEntry, selectedDate, setS
     // Reset hours, comment, tags and show success modal
     setHours(''); // Clear hours logged as requested
     setComment('');
+    setCoffees('');
     setSelectedTags([]);
     setSuccess(true);
   };
@@ -238,7 +234,6 @@ export default function TimesheetForm({ projects, onAddEntry, selectedDate, setS
         <h3 className="font-bold text-sm font-mono text-zinc-900 dark:text-white flex items-center space-x-1.5">
           <span>Log Effort Ledger</span>
         </h3>
-        <span className="text-[10px] text-zinc-400 dark:text-gray-500 font-mono">Form 1099-C (Motivation Pending)</span>
       </div>
 
       {projects.length === 0 ? (
@@ -595,7 +590,7 @@ export default function TimesheetForm({ projects, onAddEntry, selectedDate, setS
                   🎉 Hours Logged Successfully!
                 </h2>
                 <p className="text-xs text-zinc-500 dark:text-zinc-400 max-w-xs">
-                  Your timesheet has been submitted to the digital auditing queue. The auditors are temporarily appeased.
+                  Your timesheet has been logged and recorded successfully.
                 </p>
               </div>
 
