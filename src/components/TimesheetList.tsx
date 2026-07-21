@@ -7,6 +7,7 @@ import React, { useState, useEffect } from 'react';
 import { Project, TimeEntry, Tag } from '../types';
 import { Trash2, Filter, Calendar, Folder, Clock, Hash, CheckSquare, Coffee, Pencil, Check, X } from 'lucide-react';
 import { getTags } from '../utils/storage';
+import { motion, AnimatePresence } from 'motion/react';
 
 interface TimesheetListProps {
   entries: TimeEntry[];
@@ -90,6 +91,48 @@ export default function TimesheetList({ entries, projects, onDeleteEntry, onEdit
   const getProjectName = (projectId: string) => {
     const proj = projects.find(p => p.id === projectId);
     return proj ? proj.name : 'Unknown Operation';
+  };
+
+  const renderTeammateBadge = (entry: TimeEntry) => {
+    if (!entry.loggedByName) return null;
+    
+    const name = entry.loggedByName;
+    const email = entry.loggedByEmail || '';
+    const parts = name.trim().split(/\s+/);
+    let initials = '?';
+    if (parts.length === 1) {
+      initials = parts[0].substring(0, 2).toUpperCase();
+    } else if (parts.length > 1) {
+      initials = (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+    }
+    
+    const colors = [
+      'bg-red-50 dark:bg-red-950/20 text-red-600 dark:text-red-400 border-red-100 dark:border-red-900/30',
+      'bg-blue-50 dark:bg-blue-950/20 text-blue-600 dark:text-blue-400 border-blue-100 dark:border-blue-900/30',
+      'bg-emerald-50 dark:bg-emerald-950/20 text-emerald-600 dark:text-emerald-400 border-emerald-100 dark:border-emerald-900/30',
+      'bg-amber-50 dark:bg-amber-950/20 text-amber-600 dark:text-amber-400 border-amber-100 dark:border-amber-900/30',
+      'bg-violet-50 dark:bg-violet-950/20 text-violet-600 dark:text-violet-400 border-violet-100 dark:border-violet-900/30',
+      'bg-pink-50 dark:bg-pink-950/20 text-pink-600 dark:text-pink-400 border-pink-100 dark:border-pink-900/30',
+      'bg-cyan-50 dark:bg-cyan-950/20 text-cyan-600 dark:text-cyan-400 border-cyan-100 dark:border-cyan-900/30',
+      'bg-orange-50 dark:bg-orange-950/20 text-orange-600 dark:text-orange-400 border-orange-100 dark:border-orange-900/30',
+    ];
+    let hash = 0;
+    for (let i = 0; i < name.length; i++) {
+      hash = name.charCodeAt(i) + ((hash << 5) - hash);
+    }
+    const colorClass = colors[Math.abs(hash) % colors.length];
+
+    return (
+      <span 
+        className={`inline-flex items-center space-x-1 px-1.5 py-0.5 rounded-md text-[10px] font-mono border ${colorClass} font-bold transition-all shadow-xs shrink-0 select-none`}
+        title={`${name} (${email || 'No email registered'})`}
+      >
+        <span className="w-3.5 h-3.5 rounded-full bg-current/10 flex items-center justify-center text-[8.5px] font-extrabold tracking-tighter">
+          {initials}
+        </span>
+        <span className="max-w-[100px] truncate">{name}</span>
+      </span>
+    );
   };
 
   // Filter logic
@@ -206,17 +249,22 @@ export default function TimesheetList({ entries, projects, onDeleteEntry, onEdit
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-200 dark:divide-[#2F2F2F] text-xs text-zinc-800 dark:text-[#E0E0E0]">
-                {sortedEntries.map(entry => {
-                  const isEditing = editingId === entry.id;
-                  return (
-                    <tr
-                      key={entry.id}
-                      className={`transition-colors group ${
-                        isEditing 
-                          ? 'bg-blue-50/40 dark:bg-blue-950/10' 
-                          : 'hover:bg-zinc-50/50 dark:hover:bg-[#252525]/40'
-                      }`}
-                    >
+                <AnimatePresence initial={false}>
+                  {sortedEntries.map(entry => {
+                    const isEditing = editingId === entry.id;
+                    return (
+                      <motion.tr
+                        key={entry.id}
+                        initial={{ opacity: 0, y: 8 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, x: -10 }}
+                        transition={{ duration: 0.18, ease: 'easeOut' }}
+                        className={`transition-colors group ${
+                          isEditing 
+                            ? 'bg-blue-50/40 dark:bg-blue-950/10' 
+                            : 'hover:bg-zinc-50/50 dark:hover:bg-[#252525]/40'
+                        }`}
+                      >
                       {/* Date */}
                       <td className="py-2.5 px-4 font-mono text-[11px] whitespace-nowrap text-zinc-500 dark:text-gray-400">
                         {isEditing ? (
@@ -304,22 +352,21 @@ export default function TimesheetList({ entries, projects, onDeleteEntry, onEdit
                         ) : (
                           <div>
                             <div>{entry.comment}</div>
-                            {entry.tagIds && entry.tagIds.length > 0 && (
-                              <div className="flex flex-wrap gap-1 mt-1.5">
-                                {entry.tagIds.map(tagId => {
-                                  const tagObj = allTags.find(t => t.id === tagId);
-                                  if (!tagObj) return null;
-                                  return (
-                                    <span
-                                      key={tagId}
-                                      className={`text-[9px] font-mono px-1.5 py-0.5 rounded border leading-none ${tagObj.colorCode}`}
-                                    >
-                                      {tagObj.name}
-                                    </span>
-                                  );
-                                })}
-                              </div>
-                            )}
+                            <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+                              {renderTeammateBadge(entry)}
+                              {entry.tagIds && entry.tagIds.length > 0 && entry.tagIds.map(tagId => {
+                                const tagObj = allTags.find(t => t.id === tagId);
+                                if (!tagObj) return null;
+                                return (
+                                  <span
+                                    key={tagId}
+                                    className={`text-[9px] font-mono px-1.5 py-0.5 rounded border leading-none ${tagObj.colorCode}`}
+                                  >
+                                    {tagObj.name}
+                                  </span>
+                                );
+                              })}
+                            </div>
                           </div>
                         )}
                       </td>
@@ -362,9 +409,10 @@ export default function TimesheetList({ entries, projects, onDeleteEntry, onEdit
                           </div>
                         )}
                       </td>
-                    </tr>
-                  );
-                })}
+                      </motion.tr>
+                    );
+                  })}
+                </AnimatePresence>
               </tbody>
               {/* Footer row with stats */}
               <tfoot>

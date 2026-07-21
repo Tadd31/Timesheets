@@ -5,34 +5,44 @@
 
 import React, { useState, useMemo } from 'react';
 import { Project, TimeEntry } from '../types';
-import { Download, Printer, Calendar, Clock, Sparkles, TrendingUp, HelpCircle, FileText, CheckCircle, Coffee } from 'lucide-react';
+import { Download, Printer, Calendar, Clock, Sparkles, TrendingUp, HelpCircle, FileText, CheckCircle, Coffee, AlertCircle } from 'lucide-react';
 
 interface WeeklyReportProps {
   entries: TimeEntry[];
   projects: Project[];
 }
 
-interface DayTotal {
-  dayName: string;
-  dateStr: string;
+interface PeriodBreakdownItem {
+  label: string;
+  subLabel: string;
   hours: number;
   comments: string[];
+  status: string;
 }
 
 export default function WeeklyReport({ entries, projects }: WeeklyReportProps) {
+  const [viewMode, setViewMode] = useState<'weekly' | 'monthly'>('weekly');
+  const [errorNotification, setErrorNotification] = useState<string | null>(null);
+  
   const [selectedWeekStart, setSelectedWeekStart] = useState<string>(() => {
-    // Default to the current week's Monday (based on current date 2026-07-17)
-    const today = new Date('2026-07-17'); // Keep anchored to metadata date context
+    const today = new Date();
     const day = today.getDay();
     const diff = today.getDate() - day + (day === 0 ? -6 : 1); // adjust when day is sunday
     const monday = new Date(today.setDate(diff));
     return monday.toISOString().split('T')[0];
   });
 
+  const [selectedMonth, setSelectedMonth] = useState<string>(() => {
+    const today = new Date();
+    const yyyy = today.getFullYear();
+    const mm = String(today.getMonth() + 1).padStart(2, '0');
+    return `${yyyy}-${mm}`;
+  });
+
   // Generate list of the last 10 weeks for easy dropdown selection
   const weeksList = useMemo(() => {
     const list = [];
-    const baseDate = new Date('2026-07-17');
+    const baseDate = new Date();
     
     // Find Monday of the current week
     const day = baseDate.getDay();
@@ -55,6 +65,19 @@ export default function WeeklyReport({ entries, projects }: WeeklyReportProps) {
     return list;
   }, []);
 
+  // Generate list of the last 12 months for dropdown selection
+  const monthsList = useMemo(() => {
+    const list = [];
+    const baseDate = new Date();
+    for (let i = 0; i < 12; i++) {
+      const d = new Date(baseDate.getFullYear(), baseDate.getMonth() - i, 1);
+      const val = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      const label = d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+      list.push({ value: val, label });
+    }
+    return list;
+  }, []);
+
   // Selected week's date range
   const selectedWeekEnd = useMemo(() => {
     const start = new Date(selectedWeekStart);
@@ -62,86 +85,138 @@ export default function WeeklyReport({ entries, projects }: WeeklyReportProps) {
     return start.toISOString().split('T')[0];
   }, [selectedWeekStart]);
 
-  // Filter entries that fall within the selected week (Monday to Sunday)
+  // Filter entries that fall within the selected week (Monday to Sunday) - lexicographical string comparison is timezone safe!
   const weekEntries = useMemo(() => {
-    const start = new Date(selectedWeekStart);
-    const end = new Date(selectedWeekEnd);
-    // Set hours to cover the entire day
-    start.setHours(0, 0, 0, 0);
-    end.setHours(23, 59, 59, 999);
-
     return entries.filter(e => {
-      const entryDate = new Date(e.date);
-      return entryDate >= start && entryDate <= end;
+      if (!e.date) return false;
+      return e.date >= selectedWeekStart && e.date <= selectedWeekEnd;
     });
   }, [entries, selectedWeekStart, selectedWeekEnd]);
 
-  // Calculate day-by-day totals for the bar chart
-  const dailyBreakdown = useMemo((): DayTotal[] => {
-    const dayNames = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-    const breakdown: DayTotal[] = [];
+  // Filter entries that fall within the selected month - string split comparison is timezone safe!
+  const monthEntries = useMemo(() => {
+    const [yearStr, monthStr] = selectedMonth.split('-');
+    return entries.filter(e => {
+      if (!e.date) return false;
+      const [entryYear, entryMonth] = e.date.split('-');
+      return entryYear === yearStr && entryMonth === monthStr;
+    });
+  }, [entries, selectedMonth]);
 
-    for (let i = 0; i < 7; i++) {
-      const currentDay = new Date(selectedWeekStart);
-      currentDay.setDate(currentDay.getDate() + i);
-      const dateStr = currentDay.toISOString().split('T')[0];
+  // Combined active entries based on selected mode
+  const activeEntries = useMemo(() => {
+    return viewMode === 'weekly' ? weekEntries : monthEntries;
+  }, [viewMode, weekEntries, monthEntries]);
 
-      const dayEntries = weekEntries.filter(e => e.date === dateStr);
-      const hours = dayEntries.reduce((sum, e) => sum + e.hours, 0);
-      const comments = dayEntries.map(e => e.comment);
+  // Calculate day-by-day/week-by-week totals for the bar chart
+  const periodBreakdown = useMemo((): PeriodBreakdownItem[] => {
+    if (viewMode === 'weekly') {
+      const dayNames = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+      const list: PeriodBreakdownItem[] = [];
+      for (let i = 0; i < 7; i++) {
+        const [y, m, d] = selectedWeekStart.split('-').map(Number);
+        const currentDay = new Date(Date.UTC(y, m - 1, d));
+        currentDay.setUTCDate(currentDay.getUTCDate() + i);
+        const dateStr = currentDay.toISOString().split('T')[0];
 
-      breakdown.push({
-        dayName: dayNames[i],
-        dateStr,
-        hours,
-        comments
+        const dayEntries = weekEntries.filter(e => e.date === dateStr);
+        const hours = dayEntries.reduce((sum, e) => sum + e.hours, 0);
+        const comments = dayEntries.map(e => e.comment);
+
+        list.push({
+          label: dayNames[i],
+          subLabel: currentDay.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' }),
+          hours,
+          comments,
+          status: hours === 0 ? 'Pure Slacking' : hours > 8 ? 'Productivity Spike' : 'Nominal effort'
+        });
+      }
+      return list;
+    } else {
+      // Monthly View: Group by 5 weeks of the month
+      const [yearStr, monthStr] = selectedMonth.split('-');
+      const year = parseInt(yearStr, 10);
+      const monthIndex = parseInt(monthStr, 10) - 1;
+      
+      // Get total days in the selected month
+      const totalDays = new Date(year, monthIndex + 1, 0).getDate();
+
+      const weeks = [
+        { name: 'Week 1', start: 1, end: 7 },
+        { name: 'Week 2', start: 8, end: 14 },
+        { name: 'Week 3', start: 15, end: 21 },
+        { name: 'Week 4', start: 22, end: 28 },
+        { name: 'Week 5', start: 29, end: totalDays }
+      ];
+
+      return weeks.map(w => {
+        const weeklyItems = monthEntries.filter(e => {
+          if (!e.date) return false;
+          const day = parseInt(e.date.split('-')[2], 10);
+          return day >= w.start && day <= w.end;
+        });
+
+        const hours = weeklyItems.reduce((sum, e) => sum + e.hours, 0);
+        const comments = weeklyItems.map(e => e.comment);
+        const subLabel = `${w.start}th–${w.end}th`;
+
+        return {
+          label: w.name,
+          subLabel,
+          hours,
+          comments,
+          status: hours === 0 ? 'Quiet Week' : hours > 40 ? 'Heavy Sprint' : 'Nominal progress'
+        };
       });
     }
+  }, [viewMode, weekEntries, monthEntries, selectedWeekStart, selectedMonth]);
 
-    return breakdown;
-  }, [weekEntries, selectedWeekStart]);
-
-  // Total weekly hours logged
+  // Total active period hours logged
   const totalWeeklyHours = useMemo(() => {
-    return weekEntries.reduce((sum, e) => sum + e.hours, 0);
-  }, [weekEntries]);
+    return activeEntries.reduce((sum, e) => sum + e.hours, 0);
+  }, [activeEntries]);
 
+  // Total coffees consumed in the active period
   const totalWeeklyCoffees = useMemo(() => {
-    return weekEntries.reduce((sum, e) => sum + (e.coffees || 0), 0);
-  }, [weekEntries]);
+    return activeEntries.reduce((sum, e) => sum + (e.coffees || 0), 0);
+  }, [activeEntries]);
 
+  // For display counter
   const totalMonthlyCoffees = useMemo(() => {
-    const selectedDateObj = new Date(selectedWeekStart);
-    const year = selectedDateObj.getFullYear();
-    const month = selectedDateObj.getMonth();
-
+    const [yearStr, monthStr] = (viewMode === 'weekly' ? selectedWeekStart : `${selectedMonth}-01`).split('-');
     return entries.filter(e => {
-      const d = new Date(e.date);
-      return d.getFullYear() === year && d.getMonth() === month;
+      if (!e.date) return false;
+      const [entryYear, entryMonth] = e.date.split('-');
+      return entryYear === yearStr && entryMonth === monthStr;
     }).reduce((sum, e) => sum + (e.coffees || 0), 0);
-  }, [entries, selectedWeekStart]);
+  }, [entries, selectedWeekStart, selectedMonth, viewMode]);
 
   const totalAnnualCoffees = useMemo(() => {
-    const selectedDateObj = new Date(selectedWeekStart);
-    const year = selectedDateObj.getFullYear();
-
+    const [yearStr] = (viewMode === 'weekly' ? selectedWeekStart : `${selectedMonth}-01`).split('-');
     return entries.filter(e => {
-      const d = new Date(e.date);
-      return d.getFullYear() === year;
+      if (!e.date) return false;
+      const entryYear = e.date.split('-')[0];
+      return entryYear === yearStr;
     }).reduce((sum, e) => sum + (e.coffees || 0), 0);
-  }, [entries, selectedWeekStart]);
+  }, [entries, selectedWeekStart, selectedMonth, viewMode]);
 
-  // Average daily hours (across 5 working days)
+  // Average daily hours (across working days)
   const avgDailyHours = useMemo(() => {
-    const workDaysWithTime = dailyBreakdown.filter(d => d.hours > 0).length || 1;
-    return (totalWeeklyHours / workDaysWithTime).toFixed(1);
-  }, [totalWeeklyHours, dailyBreakdown]);
+    if (viewMode === 'weekly') {
+      const workDaysWithTime = periodBreakdown.filter(d => d.hours > 0).length || 1;
+      return (totalWeeklyHours / workDaysWithTime).toFixed(1);
+    } else {
+      // Monthly average across logged days
+      const loggedDays = new Set(activeEntries.map(e => e.date)).size || 1;
+      return (totalWeeklyHours / loggedDays).toFixed(1);
+    }
+  }, [viewMode, totalWeeklyHours, periodBreakdown, activeEntries]);
 
-  // Calculate billable vs non-billable hours for the weekly selection
+  // Calculate billable vs non-billable hours for the active selection
   const weeklyEffortSplit = useMemo(() => {
     let billable = 0;
     let nonBillable = 0;
-    weekEntries.forEach(e => {
+    activeEntries.forEach(e => {
       const proj = projects.find(p => p.id === e.projectId);
       if (proj?.isNonBillable) {
         nonBillable += e.hours;
@@ -150,12 +225,12 @@ export default function WeeklyReport({ entries, projects }: WeeklyReportProps) {
       }
     });
     return { billable, nonBillable };
-  }, [weekEntries, projects]);
+  }, [activeEntries, projects]);
 
   // Group by project code
   const projectContributions = useMemo(() => {
     const map: { [key: string]: number } = {};
-    weekEntries.forEach(e => {
+    activeEntries.forEach(e => {
       map[e.projectId] = (map[e.projectId] || 0) + e.hours;
     });
 
@@ -171,12 +246,13 @@ export default function WeeklyReport({ entries, projects }: WeeklyReportProps) {
         budget: proj ? proj.estimatedHours : 0
       };
     });
-  }, [weekEntries, projects, totalWeeklyHours]);
+  }, [activeEntries, projects, totalWeeklyHours]);
 
   // Export to CSV helper
   const handleExportCSV = () => {
-    if (weekEntries.length === 0) {
-      alert("No hours logged for this period. There is nothing to export except corporate silence.");
+    if (activeEntries.length === 0) {
+      setErrorNotification("No hours logged for this period. There is nothing to export except corporate silence.");
+      setTimeout(() => setErrorNotification(null), 5000);
       return;
     }
 
@@ -200,12 +276,14 @@ export default function WeeklyReport({ entries, projects }: WeeklyReportProps) {
       "Amount (£)",
       "Coffees Consumed",
       "Billable Status",
+      "Logged By (Name)",
+      "Logged By (Email)",
       "Accomplishment Comment"
     ];
 
     const rows = [headers.join(",")];
 
-    weekEntries.forEach(e => {
+    activeEntries.forEach(e => {
       const proj = projects.find(p => p.id === e.projectId);
       const agencyName = proj?.agencyName || "N/A";
       const brandName = proj?.brandName || "N/A";
@@ -228,6 +306,8 @@ export default function WeeklyReport({ entries, projects }: WeeklyReportProps) {
         escapeCSV(amount),
         escapeCSV(coffees),
         escapeCSV(billableStatus),
+        escapeCSV(e.loggedByName || "N/A"),
+        escapeCSV(e.loggedByEmail || "N/A"),
         escapeCSV(comment)
       ];
 
@@ -241,7 +321,10 @@ export default function WeeklyReport({ entries, projects }: WeeklyReportProps) {
     
     const link = document.createElement("a");
     link.setAttribute("href", url);
-    link.setAttribute("download", `weekly_timesheet_report_${selectedWeekStart}.csv`);
+    const filename = viewMode === 'weekly' 
+      ? `weekly_timesheet_report_${selectedWeekStart}.csv`
+      : `monthly_timesheet_report_${selectedMonth}.csv`;
+    link.setAttribute("download", filename);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -250,45 +333,116 @@ export default function WeeklyReport({ entries, projects }: WeeklyReportProps) {
 
   // Export as PDF / Trigger print dialog
   const handlePrintPDF = () => {
+    if (activeEntries.length === 0) {
+      setErrorNotification("No hours logged for this period. Cannot print an empty corporate document.");
+      setTimeout(() => setErrorNotification(null), 5000);
+      return;
+    }
     window.print();
   };
 
-  const maxDailyHours = Math.max(...dailyBreakdown.map(d => d.hours), 8);
+  const maxDailyHours = useMemo(() => {
+    const maxVal = Math.max(...periodBreakdown.map(d => d.hours), 1);
+    return viewMode === 'weekly' ? Math.max(maxVal, 8) : Math.max(maxVal, 40);
+  }, [periodBreakdown, viewMode]);
 
-  // Funny evaluation of total weekly hours
+  // Funny evaluation of total weekly/monthly hours
   const getWeeklyHumorReview = (hours: number) => {
-    if (hours === 0) return { title: "Absolute Zen Mode", desc: "0 hours logged. You have reached complete nirvana. Or you are about to be fired.", rating: "★★★★★ (for work-life balance)" };
-    if (hours < 20) return { title: "Stealth Slacking", desc: `${hours} hours logged. Highly strategic work distribution. No major damage reported yet.`, rating: "★★★☆☆ (Too safe)" };
-    if (hours <= 40) return { title: "Model Employee", desc: `${hours} hours logged. Exactly what the handbook prescribed. Please accept this virtual firm handshake.`, rating: "★★★★☆ (Corporate Dream)" };
-    if (hours <= 50) return { title: "Caffeine-Powered Overachiever", desc: `${hours} hours logged. Your dedication has been noticed. The reward is a slightly higher expectation next week!`, rating: "★★★★★ (Audit Alert)" };
-    return { title: "Legendary Overtime Grind", desc: `${hours} hours logged! You are single-handedly carrying the department. We have alerted the exhaustion response team.`, rating: "💀💀💀💀💀 (Cardiac Event Pending)" };
+    if (viewMode === 'weekly') {
+      if (hours === 0) return { title: "Absolute Zen Mode", desc: "0 hours logged. You have reached complete nirvana. Or you are about to be fired.", rating: "★★★★★ (for work-life balance)" };
+      if (hours < 20) return { title: "Stealth Slacking", desc: `${hours} hours logged. Highly strategic work distribution. No major damage reported yet.`, rating: "★★★☆☆ (Too safe)" };
+      if (hours <= 40) return { title: "Model Employee", desc: `${hours} hours logged. Exactly what the handbook prescribed. Please accept this virtual firm handshake.`, rating: "★★★★☆ (Corporate Dream)" };
+      if (hours <= 50) return { title: "Caffeine-Powered Overachiever", desc: `${hours} hours logged. Your dedication has been noticed. The reward is a slightly higher expectation next week!`, rating: "★★★★★ (Audit Alert)" };
+      return { title: "Legendary Overtime Grind", desc: `${hours} hours logged! You are single-handedly carrying the department. We have alerted the exhaustion response team.`, rating: "💀💀💀💀💀 (Cardiac Event Pending)" };
+    } else {
+      if (hours === 0) return { title: "Unpaid Corporate Vacation", desc: "0 hours logged for the entire month. The database queries returned blank. Are you still on payroll?", rating: "☆☆☆☆☆ (The Ghost Worker)" };
+      if (hours < 80) return { title: "Highly Optimised Laziness", desc: `${hours} hours logged this month. Maximum benefit, minimum friction. A textbook execution.`, rating: "★★☆☆☆ (Bare Minimum)" };
+      if (hours <= 160) return { title: "Solid Corporate Citizen", desc: `${hours} hours logged. Standard output generated, files submitted, meetings attended. Good job.`, rating: "★★★★☆ (Highly Compliant)" };
+      return { title: "Monthly Machinery Titan", desc: `${hours} hours logged! Senior partners are looking at summer houses in Spain on your behalf.`, rating: "👑👑👑👑👑 (Hero of the Ledger)" };
+    }
   };
 
   const review = getWeeklyHumorReview(totalWeeklyHours);
 
   return (
     <div id="weekly-report-container" className="space-y-6">
-      {/* Selection Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-xl border border-zinc-200 dark:border-[#2F2F2F] bg-white dark:bg-[#1F1F1F] shadow-sm print:hidden">
-        <div className="space-y-1">
-          <label className="text-xs font-mono font-bold text-zinc-500 dark:text-gray-400 flex items-center space-x-1.5">
-            <Calendar className="w-4 h-4 text-zinc-500" />
-            <span>Select Billing Period</span>
-          </label>
-          <select
-            value={selectedWeekStart}
-            onChange={e => setSelectedWeekStart(e.target.value)}
-            className="text-sm font-mono py-1.5 px-3 rounded-lg border border-zinc-200 dark:border-[#2F2F2F] bg-zinc-50 dark:bg-[#191919] text-zinc-800 dark:text-zinc-100 focus:outline-none focus:ring-1 focus:ring-blue-500"
+      {/* Non-blocking Error Banner */}
+      {errorNotification && (
+        <div className="p-4 bg-amber-500/10 dark:bg-amber-500/15 border border-amber-500/25 rounded-xl flex items-center justify-between gap-3 text-xs font-mono font-bold text-amber-700 dark:text-amber-400 shadow-sm animate-pulse print:hidden">
+          <div className="flex items-center gap-2.5">
+            <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-500 shrink-0" />
+            <span>{errorNotification}</span>
+          </div>
+          <button 
+            onClick={() => setErrorNotification(null)}
+            className="text-[10px] uppercase underline hover:no-underline cursor-pointer font-bold shrink-0 text-amber-700 dark:text-amber-400"
           >
-            {weeksList.map(week => (
-              <option key={week.value} value={week.value}>
-                {week.label}
-              </option>
-            ))}
-          </select>
+            Dismiss
+          </button>
+        </div>
+      )}
+
+      {/* Selection Header */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 p-4 rounded-xl border border-zinc-200 dark:border-[#2F2F2F] bg-white dark:bg-[#1F1F1F] shadow-sm print:hidden">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+          {/* Segmented View Mode Toggle */}
+          <div className="flex rounded-lg border border-zinc-200 dark:border-[#2F2F2F] p-0.5 bg-zinc-50 dark:bg-[#191919] text-xs font-mono shrink-0">
+            <button
+              onClick={() => setViewMode('weekly')}
+              className={`px-3 py-1.5 rounded-md transition-all cursor-pointer ${
+                viewMode === 'weekly'
+                  ? 'bg-white dark:bg-[#2F2F2F] text-zinc-900 dark:text-white font-bold shadow-sm'
+                  : 'text-zinc-450 hover:text-zinc-700 dark:hover:text-zinc-300'
+              }`}
+            >
+              Weekly View
+            </button>
+            <button
+              onClick={() => setViewMode('monthly')}
+              className={`px-3 py-1.5 rounded-md transition-all cursor-pointer ${
+                viewMode === 'monthly'
+                  ? 'bg-white dark:bg-[#2F2F2F] text-zinc-900 dark:text-white font-bold shadow-sm'
+                  : 'text-zinc-450 hover:text-zinc-700 dark:hover:text-zinc-300'
+              }`}
+            >
+              Monthly View
+            </button>
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-[10px] uppercase tracking-wider font-mono font-bold text-zinc-400 dark:text-gray-500 flex items-center space-x-1">
+              <Calendar className="w-3 h-3 text-zinc-400" />
+              <span>{viewMode === 'weekly' ? 'Select Weekly Billing Period' : 'Select Month'}</span>
+            </label>
+            {viewMode === 'weekly' ? (
+              <select
+                value={selectedWeekStart}
+                onChange={e => setSelectedWeekStart(e.target.value)}
+                className="text-xs font-mono py-1.5 px-3 rounded-lg border border-zinc-200 dark:border-[#2F2F2F] bg-zinc-50 dark:bg-[#191919] text-zinc-800 dark:text-zinc-100 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              >
+                {weeksList.map(week => (
+                  <option key={week.value} value={week.value}>
+                    {week.label}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <select
+                value={selectedMonth}
+                onChange={e => setSelectedMonth(e.target.value)}
+                className="text-xs font-mono py-1.5 px-3 rounded-lg border border-zinc-200 dark:border-[#2F2F2F] bg-zinc-50 dark:bg-[#191919] text-zinc-800 dark:text-zinc-100 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              >
+                {monthsList.map(m => (
+                  <option key={m.value} value={m.value}>
+                    {m.label}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 self-end md:self-auto">
           {/* Export to CSV Button */}
           <button
             onClick={handleExportCSV}
@@ -317,9 +471,15 @@ export default function WeeklyReport({ entries, projects }: WeeklyReportProps) {
         <div className="flex flex-col sm:flex-row justify-between items-start gap-4 pb-6 border-b border-zinc-200 dark:border-[#2F2F2F]">
           <div className="space-y-1.5">
             <span className="text-[10px] uppercase font-mono tracking-widest text-zinc-400 dark:text-zinc-500">Corporate Effort Dispatch</span>
-            <h1 className="text-xl sm:text-2xl font-bold text-zinc-950 dark:text-white font-mono tracking-tight">Timesheet Report Card</h1>
+            <h1 className="text-xl sm:text-2xl font-bold text-zinc-950 dark:text-white font-mono tracking-tight">
+              {viewMode === 'weekly' ? 'Weekly Timesheet Report Card' : 'Monthly Timesheet Report Card'}
+            </h1>
             <p className="text-xs text-zinc-500 dark:text-gray-400 font-mono flex items-center space-x-1.5">
-              <span>Period: <strong>{selectedWeekStart}</strong> to <strong>{selectedWeekEnd}</strong></span>
+              {viewMode === 'weekly' ? (
+                <span>Period: <strong>{selectedWeekStart}</strong> to <strong>{selectedWeekEnd}</strong></span>
+              ) : (
+                <span>Month: <strong>{monthsList.find(m => m.value === selectedMonth)?.label || selectedMonth}</strong></span>
+              )}
             </p>
           </div>
           
@@ -334,7 +494,9 @@ export default function WeeklyReport({ entries, projects }: WeeklyReportProps) {
         {/* Key Metrics Columns */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 py-2">
           <div className="p-3 border border-zinc-150 dark:border-[#2F2F2F] rounded-lg space-y-1 bg-zinc-50/10 dark:bg-zinc-950/10">
-            <span className="text-[10px] uppercase font-mono text-zinc-400 dark:text-zinc-500">Weekly Effort</span>
+            <span className="text-[10px] uppercase font-mono text-zinc-400 dark:text-zinc-500">
+              {viewMode === 'weekly' ? 'Weekly Effort' : 'Monthly Effort'}
+            </span>
             <p className="text-lg font-bold font-mono text-zinc-900 dark:text-zinc-100">{totalWeeklyHours} hrs</p>
           </div>
           <div className="p-3 border border-emerald-150 dark:border-emerald-950 rounded-lg space-y-1 bg-emerald-500/5">
@@ -351,13 +513,11 @@ export default function WeeklyReport({ entries, projects }: WeeklyReportProps) {
           </div>
         </div>
 
-
-
         {/* Modern Bar Chart block */}
         <div className="space-y-3 pt-2">
           <div className="flex items-center justify-between">
             <h3 className="text-xs font-bold font-mono uppercase tracking-wider text-zinc-500 dark:text-gray-400">
-              Hourly distribution across days
+              {viewMode === 'weekly' ? 'Hourly distribution across days' : 'Hourly distribution across weeks'}
             </h3>
             <span className="text-[10px] text-zinc-400 dark:text-gray-500 font-mono italic">
               Scale auto-calibrated to coffee supply
@@ -365,41 +525,35 @@ export default function WeeklyReport({ entries, projects }: WeeklyReportProps) {
           </div>
 
           <div className="flex flex-col space-y-3 border border-zinc-150 dark:border-[#2F2F2F] rounded-xl p-4 bg-zinc-50/30 dark:bg-[#191919]">
-            {dailyBreakdown.map(day => {
-              const spentPercent = maxDailyHours > 0 ? (day.hours / maxDailyHours) * 100 : 0;
+            {periodBreakdown.map(item => {
+              const spentPercent = maxDailyHours > 0 ? (item.hours / maxDailyHours) * 100 : 0;
               return (
-                <div key={day.dateStr} className="grid grid-cols-10 gap-2 items-center">
-                  {/* Day label */}
-                  <div className="col-span-2 text-xs font-mono font-medium text-zinc-600 dark:text-zinc-300 truncate">
-                    {day.dayName}
+                <div key={item.label} className="grid grid-cols-10 gap-2 items-center">
+                  {/* Label */}
+                  <div className="col-span-3 sm:col-span-2 text-xs font-mono font-medium text-zinc-600 dark:text-zinc-300 truncate">
+                    {item.label} <span className="text-[9px] text-zinc-400 dark:text-zinc-500 font-normal">({item.subLabel})</span>
                   </div>
                   {/* Bar indicator */}
-                  <div className="col-span-6 h-4 bg-zinc-100 dark:bg-[#252525] rounded-sm relative overflow-hidden border border-zinc-200/30 dark:border-[#2F2F2F]/30 flex items-center">
+                  <div className="col-span-5 sm:col-span-6 h-4 bg-zinc-100 dark:bg-[#252525] rounded-sm relative overflow-hidden border border-zinc-200/30 dark:border-[#2F2F2F]/30 flex items-center">
                     <div
                       className={`h-full rounded-sm transition-all duration-300 ${
-                        day.hours > 8
+                        item.hours > (viewMode === 'weekly' ? 8 : 40)
                           ? 'bg-amber-600 dark:bg-amber-500'
-                          : day.hours > 0
+                          : item.hours > 0
                           ? 'bg-zinc-800 dark:bg-blue-500'
                           : 'bg-transparent'
                       }`}
                       style={{ width: `${spentPercent}%` }}
                     />
-                    {day.hours > 0 && (
+                    {item.hours > 0 && (
                       <span className="absolute left-2 text-[9px] font-mono font-bold text-zinc-400 mix-blend-difference">
-                        {day.hours}h
+                        {item.hours}h
                       </span>
                     )}
                   </div>
                   {/* Summary commentary line */}
                   <div className="col-span-2 text-[10px] text-zinc-400 dark:text-gray-500 truncate italic text-right">
-                    {day.hours === 0 ? (
-                      <span>Pure Slacking</span>
-                    ) : day.hours > 8 ? (
-                      <span>Productivity Spike</span>
-                    ) : (
-                      <span>Nominal effort</span>
-                    )}
+                    <span>{item.status}</span>
                   </div>
                 </div>
               );
@@ -446,12 +600,12 @@ export default function WeeklyReport({ entries, projects }: WeeklyReportProps) {
               Narrative Log Digest
             </h3>
             <div className="p-4 border border-zinc-200 dark:border-[#2F2F2F] rounded-xl bg-zinc-50/20 dark:bg-[#191919] max-h-[220px] overflow-y-auto space-y-2.5">
-              {weekEntries.length === 0 ? (
+              {activeEntries.length === 0 ? (
                 <p className="text-xs text-zinc-400 dark:text-gray-500 italic text-center py-4 font-mono">
                   Corporate logs are completely vacant. Silence implies compliance.
                 </p>
               ) : (
-                weekEntries.map(e => (
+                activeEntries.map(e => (
                   <div key={e.id} className="text-[11px] leading-relaxed border-l-2 border-zinc-300 dark:border-[#3F3F3F] pl-2.5">
                     <span className="font-mono text-zinc-400 font-bold mr-1">[{e.date}]</span>
                     <span className="text-zinc-700 dark:text-zinc-300 italic">"{e.comment}"</span>
@@ -468,7 +622,7 @@ export default function WeeklyReport({ entries, projects }: WeeklyReportProps) {
               </div>
               <div className="grid grid-cols-3 gap-2 font-mono">
                 <div className="p-2 bg-zinc-50 dark:bg-[#191919] border border-zinc-200 dark:border-[#2F2F2F] rounded-lg space-y-0.5">
-                  <span className="text-[8px] uppercase text-zinc-400">Weekly</span>
+                  <span className="text-[8px] uppercase text-zinc-400">{viewMode === 'weekly' ? 'Weekly' : 'Active Period'}</span>
                   <p className="text-xs font-bold text-amber-600 dark:text-amber-500">{totalWeeklyCoffees} cups</p>
                 </div>
                 <div className="p-2 bg-zinc-50 dark:bg-[#191919] border border-zinc-200 dark:border-[#2F2F2F] rounded-lg space-y-0.5">

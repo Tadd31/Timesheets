@@ -4,8 +4,8 @@
  */
 
 import React, { useState, useMemo } from 'react';
-import { Project, TimeEntry } from '../types';
-import { Calendar, Plus, Trash2, Clock, CheckCircle2, ChevronRight, AlertTriangle, Info, Coffee, Pencil, BarChart3, TrendingDown, ChevronDown, ChevronUp, X, AlertOctagon } from 'lucide-react';
+import { Project, TimeEntry, Agency } from '../types';
+import { Calendar, Plus, Trash2, Clock, CheckCircle2, ChevronRight, AlertTriangle, Info, Coffee, Pencil, BarChart3, TrendingDown, ChevronDown, ChevronUp, X, AlertOctagon, Building2, Globe, Mail, Link } from 'lucide-react';
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine } from 'recharts';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -15,9 +15,23 @@ interface ProjectManagerProps {
   onAddProject: (project: Omit<Project, 'id' | 'createdAt'>) => void;
   onEditProject: (project: Project) => void;
   onDeleteProject: (projectId: string) => void;
+  agencies: Agency[];
+  onAddAgency: (agency: Omit<Agency, 'id' | 'createdAt'>) => void;
+  onEditAgency: (agency: Agency) => void;
+  onDeleteAgency: (agencyId: string) => void;
 }
 
-export default function ProjectManager({ projects, entries, onAddProject, onEditProject, onDeleteProject }: ProjectManagerProps) {
+export default function ProjectManager({
+  projects,
+  entries,
+  onAddProject,
+  onEditProject,
+  onDeleteProject,
+  agencies,
+  onAddAgency,
+  onEditAgency,
+  onDeleteAgency
+}: ProjectManagerProps) {
   const [showForm, setShowForm] = useState(false);
   const [name, setName] = useState('');
   const [estimatedHours, setEstimatedHours] = useState('');
@@ -29,10 +43,30 @@ export default function ProjectManager({ projects, entries, onAddProject, onEdit
   });
   const [agencyName, setAgencyName] = useState('');
   const [brandName, setBrandName] = useState('');
-  const [rate, setRate] = useState('');
+
+  const uniqueBrandNames = useMemo(() => {
+    return Array.from(
+      new Set(
+        projects
+          .map(p => p.brandName)
+          .filter((b): b is string => !!b && b.trim() !== '')
+      )
+    ).sort();
+  }, [projects]);
+  const [dayRate, setDayRate] = useState('');
+  const [hoursInDay, setHoursInDay] = useState('8');
   const [description, setDescription] = useState('');
   const [isNonBillable, setIsNonBillable] = useState(false);
   const [error, setError] = useState('');
+
+  // Agency management states
+  const [showAgencyPanel, setShowAgencyPanel] = useState(false);
+  const [newAgencyName, setNewAgencyName] = useState('');
+  const [newAgencyAddress, setNewAgencyAddress] = useState('');
+  const [newAgencyUrl, setNewAgencyUrl] = useState('');
+  const [newAgencyContact, setNewAgencyContact] = useState('');
+  const [newAgencyFinance, setNewAgencyFinance] = useState('');
+  const [agencyError, setAgencyError] = useState('');
 
   const [budgetHours, setBudgetHours] = useState('');
   const [alertThresholds, setAlertThresholds] = useState('50, 75, 90, 100');
@@ -49,7 +83,8 @@ export default function ProjectManager({ projects, entries, onAddProject, onEdit
   const [editAgencyName, setEditAgencyName] = useState('');
   const [editBrandName, setEditBrandName] = useState('');
   const [editEstimatedHours, setEditEstimatedHours] = useState('');
-  const [editRate, setEditRate] = useState('');
+  const [editDayRate, setEditDayRate] = useState('');
+  const [editHoursInDay, setEditHoursInDay] = useState('8');
   const [editStartDate, setEditStartDate] = useState('');
   const [editEndDate, setEditEndDate] = useState('');
   const [editDescription, setEditDescription] = useState('');
@@ -57,6 +92,17 @@ export default function ProjectManager({ projects, entries, onAddProject, onEdit
   const [editBudgetHours, setEditBudgetHours] = useState('');
   const [editAlertThresholds, setEditAlertThresholds] = useState('');
   const [editError, setEditError] = useState('');
+  
+  // Interactive expanded agency cards
+  const [expandedAgencyProjectId, setExpandedAgencyProjectId] = useState<string | null>(null);
+
+  // Agency inline editing states
+  const [editingAgencyId, setEditingAgencyId] = useState<string | null>(null);
+  const [editAgencyField_name, setEditAgencyField_name] = useState('');
+  const [editAgencyField_address, setEditAgencyField_address] = useState('');
+  const [editAgencyField_url, setEditAgencyField_url] = useState('');
+  const [editAgencyField_contact, setEditAgencyField_contact] = useState('');
+  const [editAgencyField_finance, setEditAgencyField_finance] = useState('');
 
   // Custom delete confirmation modal state
   const [projectToDelete, setProjectToDelete] = useState<Project | null>(null);
@@ -67,7 +113,8 @@ export default function ProjectManager({ projects, entries, onAddProject, onEdit
     setEditAgencyName(proj.agencyName || '');
     setEditBrandName(proj.brandName || '');
     setEditEstimatedHours(String(proj.estimatedHours));
-    setEditRate(String(proj.rate ?? ''));
+    setEditDayRate(String(proj.dayRate ?? (proj.rate ? Math.round(proj.rate * (proj.hoursInDay ?? 8)) : '')));
+    setEditHoursInDay(String(proj.hoursInDay ?? '8'));
     setEditStartDate(proj.startDate);
     setEditEndDate(proj.endDate);
     setEditDescription(proj.description || '');
@@ -91,12 +138,16 @@ export default function ProjectManager({ projects, entries, onAddProject, onEdit
       setEditError('Brand Client is mandatory.');
       return;
     }
-    if (!editEstimatedHours.trim()) {
+    if (!editIsNonBillable && !editEstimatedHours.trim()) {
       setEditError('Estimated Hours (Budget) is mandatory.');
       return;
     }
-    if (!editRate.trim()) {
-      setEditError('Hourly Rate is mandatory.');
+    if (!editDayRate.trim()) {
+      setEditError('Day Rate is mandatory. (Enter 0 if this project is completely non-revenue).');
+      return;
+    }
+    if (!editHoursInDay.trim()) {
+      setEditError('Hours in a day is mandatory.');
       return;
     }
     if (!editDescription.trim()) {
@@ -104,17 +155,29 @@ export default function ProjectManager({ projects, entries, onAddProject, onEdit
       return;
     }
 
-    const hours = parseFloat(editEstimatedHours);
-    if (isNaN(hours) || hours <= 0) {
+    const hours = editEstimatedHours.trim() ? parseFloat(editEstimatedHours) : 0;
+    if (!editIsNonBillable && (isNaN(hours) || hours <= 0)) {
       setEditError('Estimated hours must be greater than zero.');
       return;
     }
-
-    const numericRate = parseFloat(editRate);
-    if (isNaN(numericRate) || numericRate < 0) {
-      setEditError('Hourly rate must be a non-negative number.');
+    if (editIsNonBillable && isNaN(hours)) {
+      setEditError('Estimated hours must be a valid number.');
       return;
     }
+
+    const numericDayRate = parseFloat(editDayRate);
+    if (isNaN(numericDayRate) || numericDayRate < 0) {
+      setEditError('Day rate must be a non-negative number.');
+      return;
+    }
+
+    const numericHoursInDay = parseFloat(editHoursInDay);
+    if (isNaN(numericHoursInDay) || numericHoursInDay <= 0) {
+      setEditError('Hours in a day must be a positive number.');
+      return;
+    }
+
+    const numericRate = numericDayRate / numericHoursInDay;
 
     if (new Date(editStartDate) > new Date(editEndDate)) {
       setEditError('The start date cannot be after the end date.');
@@ -124,27 +187,6 @@ export default function ProjectManager({ projects, entries, onAddProject, onEdit
     const original = projects.find(p => p.id === id);
     if (!original) return;
 
-    let budgetVal: number | null = null;
-    if (editBudgetHours.trim()) {
-      budgetVal = parseFloat(editBudgetHours);
-      if (isNaN(budgetVal) || budgetVal <= 0) {
-        setEditError('Budget hours must be greater than zero.');
-        return;
-      }
-    }
-
-    let thresholdsVal: number[] = [50, 75, 90, 100];
-    if (editAlertThresholds.trim()) {
-      thresholdsVal = editAlertThresholds
-        .split(',')
-        .map(t => parseFloat(t.trim()))
-        .filter(t => !isNaN(t) && t > 0);
-      if (thresholdsVal.length === 0) {
-        setEditError('Alert thresholds must be a comma-separated list of positive percentages.');
-        return;
-      }
-    }
-
     onEditProject({
       ...original,
       name: editName.trim(),
@@ -152,12 +194,14 @@ export default function ProjectManager({ projects, entries, onAddProject, onEdit
       brandName: editBrandName.trim() || undefined,
       estimatedHours: hours,
       rate: numericRate,
+      dayRate: numericDayRate,
+      hoursInDay: numericHoursInDay,
       startDate: editStartDate,
       endDate: editEndDate,
       description: editDescription.trim() || undefined,
       isNonBillable: editIsNonBillable,
-      budget_hours: budgetVal,
-      alert_thresholds: thresholdsVal
+      budget_hours: hours,
+      alert_thresholds: original.alert_thresholds || [50, 75, 90, 100]
     });
 
     setEditingProjectId(null);
@@ -180,12 +224,16 @@ export default function ProjectManager({ projects, entries, onAddProject, onEdit
       setError('Brand Client is mandatory. Senior management requires target brand logos.');
       return;
     }
-    if (!estimatedHours.trim()) {
+    if (!isNonBillable && !estimatedHours.trim()) {
       setError('Estimated Hours (Budget) is mandatory. We must track resource constraints.');
       return;
     }
-    if (!rate.trim()) {
-      setError('Hourly Rate is mandatory. (Enter 0 if this project is completely non-revenue).');
+    if (!dayRate.trim()) {
+      setError('Day Rate is mandatory. (Enter 0 if this project is completely non-revenue).');
+      return;
+    }
+    if (!hoursInDay.trim()) {
+      setError('Hours in a day is mandatory.');
       return;
     }
     if (!description.trim()) {
@@ -193,17 +241,29 @@ export default function ProjectManager({ projects, entries, onAddProject, onEdit
       return;
     }
 
-    const hours = parseFloat(estimatedHours);
-    if (isNaN(hours) || hours <= 0) {
+    const hours = estimatedHours.trim() ? parseFloat(estimatedHours) : 0;
+    if (!isNonBillable && (isNaN(hours) || hours <= 0)) {
       setError('Estimated hours must be greater than zero. Infinite budgets are still pending board approval.');
       return;
     }
-
-    const numericRate = parseFloat(rate);
-    if (isNaN(numericRate) || numericRate < 0) {
-      setError('Hourly rate must be a non-negative number. Free labor requires a signed waiver.');
+    if (isNonBillable && isNaN(hours)) {
+      setError('Estimated hours must be a valid number.');
       return;
     }
+
+    const numericDayRate = parseFloat(dayRate);
+    if (isNaN(numericDayRate) || numericDayRate < 0) {
+      setError('Day rate must be a non-negative number. Free labor requires a signed waiver.');
+      return;
+    }
+
+    const numericHoursInDay = parseFloat(hoursInDay);
+    if (isNaN(numericHoursInDay) || numericHoursInDay <= 0) {
+      setError('Hours in a day must be a positive number.');
+      return;
+    }
+
+    const numericRate = numericDayRate / numericHoursInDay;
 
     if (new Date(startDate) > new Date(endDate)) {
       setError('The start date cannot be in the future of the end date. We have not mastered time-travel physics.');
@@ -240,8 +300,10 @@ export default function ProjectManager({ projects, entries, onAddProject, onEdit
       agencyName: agencyName.trim() || undefined,
       brandName: brandName.trim() || undefined,
       rate: numericRate,
+      dayRate: numericDayRate,
+      hoursInDay: numericHoursInDay,
       isNonBillable,
-      budget_hours: budgetVal,
+      budget_hours: budgetVal || hours,
       alert_thresholds: thresholdsVal
     });
 
@@ -250,12 +312,66 @@ export default function ProjectManager({ projects, entries, onAddProject, onEdit
     setEstimatedHours('');
     setAgencyName('');
     setBrandName('');
-    setRate('');
+    setDayRate('');
+    setHoursInDay('8');
     setDescription('');
     setIsNonBillable(false);
     setBudgetHours('');
     setAlertThresholds('50, 75, 90, 100');
     setShowForm(false);
+  };
+
+  // Submit agency form
+  const handleAddAgencySubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setAgencyError('');
+
+    if (!newAgencyName.trim()) {
+      setAgencyError('Agency Name is mandatory.');
+      return;
+    }
+    if (!newAgencyAddress.trim()) {
+      setAgencyError('Agency Address is mandatory.');
+      return;
+    }
+    if (!newAgencyUrl.trim()) {
+      setAgencyError('Agency URL is mandatory.');
+      return;
+    }
+    if (!newAgencyContact.trim()) {
+      setAgencyError('Main contact email is mandatory.');
+      return;
+    }
+    if (!newAgencyFinance.trim()) {
+      setAgencyError('Finance team email is mandatory.');
+      return;
+    }
+
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(newAgencyContact.trim())) {
+      setAgencyError('Please enter a valid main contact email.');
+      return;
+    }
+    if (!emailRegex.test(newAgencyFinance.trim())) {
+      setAgencyError('Please enter a valid finance contact email.');
+      return;
+    }
+
+    onAddAgency({
+      name: newAgencyName.trim(),
+      address: newAgencyAddress.trim(),
+      url: newAgencyUrl.trim(),
+      contactEmail: newAgencyContact.trim(),
+      financeEmail: newAgencyFinance.trim(),
+    });
+
+    // Reset fields
+    setNewAgencyName('');
+    setNewAgencyAddress('');
+    setNewAgencyUrl('');
+    setNewAgencyContact('');
+    setNewAgencyFinance('');
   };
 
   // Calculate total hours logged for each project
@@ -874,21 +990,344 @@ export default function ProjectManager({ projects, entries, onAddProject, onEdit
       </div>
 
       {/* Title & Action Panel */}
-      <div className="flex items-center justify-between pt-2">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2">
         <div>
           <h2 className="text-lg font-bold text-zinc-900 dark:text-white">Project Backlogs</h2>
           <p className="text-xs text-zinc-500 dark:text-gray-400 font-mono font-medium">Where deadlines loom and potential earnings become real.</p>
         </div>
-        {!showForm && (
+        <div className="flex items-center space-x-2 shrink-0">
           <button
-            onClick={() => setShowForm(true)}
-            className="flex items-center space-x-1.5 py-1.5 px-3 rounded-lg bg-zinc-900 dark:bg-blue-600 hover:bg-zinc-800 dark:hover:bg-blue-500 text-white text-xs font-semibold font-mono transition-all shadow-sm cursor-pointer"
+            type="button"
+            onClick={() => setShowAgencyPanel(!showAgencyPanel)}
+            className={`flex items-center space-x-1.5 py-1.5 px-3 rounded-lg border text-xs font-semibold font-mono transition-all shadow-sm cursor-pointer ${
+              showAgencyPanel
+                ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-450 border-blue-300 dark:border-blue-800'
+                : 'bg-white dark:bg-[#252525] border-zinc-200 dark:border-[#2F2F2F] hover:bg-zinc-50 dark:hover:bg-[#2D2D2D] text-zinc-700 dark:text-[#E0E0E0]'
+            }`}
           >
-            <Plus className="w-3.5 h-3.5" />
-            <span>Initiate New Project</span>
+            <Building2 className="w-3.5 h-3.5" />
+            <span>{showAgencyPanel ? 'Hide Agency Directory' : 'Agency Directory'}</span>
           </button>
-        )}
+          
+          {!showForm && (
+            <button
+              onClick={() => setShowForm(true)}
+              className="flex items-center space-x-1.5 py-1.5 px-3 rounded-lg bg-zinc-900 dark:bg-blue-600 hover:bg-zinc-800 dark:hover:bg-blue-500 text-white text-xs font-semibold font-mono transition-all shadow-sm cursor-pointer"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>Initiate New Project</span>
+            </button>
+          )}
+        </div>
       </div>
+
+      {/* Agency Directory Panel */}
+      <AnimatePresence>
+        {showAgencyPanel && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            className="overflow-hidden"
+          >
+            <div className="p-5 rounded-xl border border-zinc-200 dark:border-[#2F2F2F] bg-zinc-50/50 dark:bg-[#1B1B1B] shadow-sm space-y-5 my-4">
+              <div className="flex items-center justify-between border-b border-zinc-200 dark:border-[#2F2F2F] pb-3">
+                <div className="flex items-center space-x-2">
+                  <Building2 className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                  <h3 className="text-sm font-bold font-mono text-zinc-800 dark:text-[#E0E0E0] uppercase tracking-wider">
+                    🏢 Registered Agencies Directory
+                  </h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowAgencyPanel(false)}
+                  className="text-zinc-400 hover:text-zinc-650 dark:hover:text-zinc-200 cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                
+                {/* 1. Register Agency Form */}
+                <div className="lg:col-span-5 p-4 rounded-xl border border-zinc-200 dark:border-[#2F2F2F] bg-white dark:bg-[#212121] shadow-sm space-y-3">
+                  <h4 className="text-xs font-bold font-mono text-zinc-700 dark:text-zinc-350 uppercase tracking-wide">
+                    ➕ Register New Agency
+                  </h4>
+
+                  {agencyError && (
+                    <div className="p-2.5 text-[11px] font-mono bg-rose-50 dark:bg-rose-950/25 border border-rose-100 dark:border-rose-900/50 text-rose-600 dark:text-rose-450 rounded-lg">
+                      ⚠️ {agencyError}
+                    </div>
+                  )}
+
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-mono font-bold uppercase tracking-wider text-zinc-500">Agency Name</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Sterling Cooper"
+                      value={newAgencyName}
+                      onChange={e => setNewAgencyName(e.target.value)}
+                      className="w-full py-1.5 px-3 text-xs rounded-lg border border-zinc-200 dark:border-[#2F2F2F] bg-zinc-50 dark:bg-[#191919] text-zinc-800 dark:text-[#E0E0E0] focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-mono font-bold uppercase tracking-wider text-zinc-500">Physical Address</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. 405 Madison Ave, New York"
+                      value={newAgencyAddress}
+                      onChange={e => setNewAgencyAddress(e.target.value)}
+                      className="w-full py-1.5 px-3 text-xs rounded-lg border border-zinc-200 dark:border-[#2F2F2F] bg-zinc-50 dark:bg-[#191919] text-zinc-800 dark:text-[#E0E0E0] focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-mono font-bold uppercase tracking-wider text-zinc-500">Agency Website URL</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. https://sterlingcooper.com"
+                      value={newAgencyUrl}
+                      onChange={e => setNewAgencyUrl(e.target.value)}
+                      className="w-full py-1.5 px-3 text-xs rounded-lg border border-zinc-200 dark:border-[#2F2F2F] bg-zinc-50 dark:bg-[#191919] text-zinc-800 dark:text-[#E0E0E0] focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-mono font-bold uppercase tracking-wider text-zinc-500">Main Contact Email</label>
+                      <input
+                        type="email"
+                        placeholder="e.g. info@agency.com"
+                        value={newAgencyContact}
+                        onChange={e => setNewAgencyContact(e.target.value)}
+                        className="w-full py-1.5 px-3 text-xs rounded-lg border border-zinc-200 dark:border-[#2F2F2F] bg-zinc-50 dark:bg-[#191919] text-zinc-800 dark:text-[#E0E0E0] focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      />
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-mono font-bold uppercase tracking-wider text-zinc-500">Finance Email</label>
+                      <input
+                        type="email"
+                        placeholder="e.g. billing@agency.com"
+                        value={newAgencyFinance}
+                        onChange={e => setNewAgencyFinance(e.target.value)}
+                        className="w-full py-1.5 px-3 text-xs rounded-lg border border-zinc-200 dark:border-[#2F2F2F] bg-zinc-50 dark:bg-[#191919] text-zinc-800 dark:text-[#E0E0E0] focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      />
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleAddAgencySubmit}
+                    className="w-full mt-2 py-1.5 rounded-lg bg-blue-650 hover:bg-blue-600 text-white text-xs font-mono font-semibold transition-all shadow-sm cursor-pointer"
+                  >
+                    Register Agency
+                  </button>
+                </div>
+
+                {/* 2. Registered Agencies List */}
+                <div className="lg:col-span-7 space-y-3">
+                  <h4 className="text-xs font-bold font-mono text-zinc-700 dark:text-zinc-350 uppercase tracking-wide">
+                    📜 Agency Directory ({agencies.length})
+                  </h4>
+
+                  <div className="space-y-3.5 max-h-[360px] overflow-y-auto pr-1">
+                    {agencies.length === 0 ? (
+                      <div className="p-8 text-center border border-dashed border-zinc-200 dark:border-[#2F2F2F] rounded-xl text-zinc-400 font-mono text-xs italic bg-white dark:bg-[#1F1F1F]">
+                        No registered agencies found. Add your first agency using the form on the left!
+                      </div>
+                    ) : (
+                      agencies.map(agency => {
+                        if (editingAgencyId === agency.id) {
+                          return (
+                            <div
+                              key={agency.id}
+                              className="p-4 rounded-xl border border-blue-200 dark:border-blue-900 bg-blue-50/15 dark:bg-blue-950/10 shadow-sm space-y-3"
+                            >
+                              <h5 className="text-xs font-bold font-mono text-blue-600 dark:text-blue-400">Edit Agency</h5>
+                              
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                <div className="space-y-1">
+                                  <label className="text-[10px] font-mono text-zinc-500">Agency Name</label>
+                                  <input
+                                    type="text"
+                                    value={editAgencyField_name}
+                                    onChange={e => setEditAgencyField_name(e.target.value)}
+                                    className="w-full py-1 px-2.5 text-xs rounded border border-zinc-200 dark:border-[#2F2F2F] bg-white dark:bg-[#191919] text-zinc-850 dark:text-[#E0E0E0] focus:outline-none focus:ring-1 focus:ring-blue-500"
+                                  />
+                                </div>
+                                <div className="space-y-1">
+                                  <label className="text-[10px] font-mono text-zinc-500">Website URL</label>
+                                  <input
+                                    type="text"
+                                    value={editAgencyField_url}
+                                    onChange={e => setEditAgencyField_url(e.target.value)}
+                                    className="w-full py-1 px-2.5 text-xs rounded border border-zinc-200 dark:border-[#2F2F2F] bg-white dark:bg-[#191919] text-zinc-850 dark:text-[#E0E0E0] focus:outline-none focus:ring-1 focus:ring-blue-500"
+                                  />
+                                </div>
+                              </div>
+
+                              <div className="space-y-1">
+                                <label className="text-[10px] font-mono text-zinc-500">Physical Address</label>
+                                <input
+                                  type="text"
+                                  value={editAgencyField_address}
+                                  onChange={e => setEditAgencyField_address(e.target.value)}
+                                  className="w-full py-1 px-2.5 text-xs rounded border border-zinc-200 dark:border-[#2F2F2F] bg-white dark:bg-[#191919] text-zinc-850 dark:text-[#E0E0E0] focus:outline-none focus:ring-1 focus:ring-blue-500"
+                                />
+                              </div>
+
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                <div className="space-y-1">
+                                  <label className="text-[10px] font-mono text-zinc-500">Contact Email</label>
+                                  <input
+                                    type="email"
+                                    value={editAgencyField_contact}
+                                    onChange={e => setEditAgencyField_contact(e.target.value)}
+                                    className="w-full py-1 px-2.5 text-xs rounded border border-zinc-200 dark:border-[#2F2F2F] bg-white dark:bg-[#191919] text-zinc-850 dark:text-[#E0E0E0] focus:outline-none focus:ring-1 focus:ring-blue-500"
+                                  />
+                                </div>
+                                <div className="space-y-1">
+                                  <label className="text-[10px] font-mono text-zinc-500">Finance Email</label>
+                                  <input
+                                    type="email"
+                                    value={editAgencyField_finance}
+                                    onChange={e => setEditAgencyField_finance(e.target.value)}
+                                    className="w-full py-1 px-2.5 text-xs rounded border border-zinc-200 dark:border-[#2F2F2F] bg-white dark:bg-[#191919] text-zinc-850 dark:text-[#E0E0E0] focus:outline-none focus:ring-1 focus:ring-blue-500"
+                                  />
+                                </div>
+                              </div>
+
+                              <div className="flex justify-end space-x-2 pt-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => setEditingAgencyId(null)}
+                                  className="px-2.5 py-1 rounded bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-zinc-650 dark:text-zinc-300 text-[10px] font-mono cursor-pointer"
+                                >
+                                  Cancel
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (!editAgencyField_name.trim()) {
+                                      alert('Agency Name is mandatory.');
+                                      return;
+                                    }
+                                    if (!editAgencyField_address.trim()) {
+                                      alert('Agency Address is mandatory.');
+                                      return;
+                                    }
+                                    if (!editAgencyField_url.trim()) {
+                                      alert('Agency URL is mandatory.');
+                                      return;
+                                    }
+                                    onEditAgency({
+                                      ...agency,
+                                      name: editAgencyField_name.trim(),
+                                      address: editAgencyField_address.trim(),
+                                      url: editAgencyField_url.trim(),
+                                      contactEmail: editAgencyField_contact.trim(),
+                                      financeEmail: editAgencyField_finance.trim()
+                                    });
+                                    setEditingAgencyId(null);
+                                  }}
+                                  className="px-2.5 py-1 rounded bg-blue-650 hover:bg-blue-600 text-white text-[10px] font-mono cursor-pointer"
+                                >
+                                  Save
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        }
+
+                        return (
+                          <div
+                            key={agency.id}
+                            className="p-4 rounded-xl border border-zinc-200 dark:border-[#2F2F2F] bg-white dark:bg-[#212121] shadow-sm flex flex-col sm:flex-row sm:items-start justify-between gap-3 relative hover:shadow-md transition-shadow"
+                          >
+                            <div className="space-y-2">
+                              <div>
+                                <h5 className="text-sm font-bold text-zinc-900 dark:text-white font-sans flex items-center gap-1.5">
+                                  🏢 {agency.name}
+                                </h5>
+                                <p className="text-[11px] text-zinc-400 dark:text-zinc-450 font-mono">Registered on {new Date(agency.createdAt).toLocaleDateString('en-GB')}</p>
+                              </div>
+
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] font-mono text-zinc-600 dark:text-zinc-350">
+                                <div className="flex items-center space-x-1.5 truncate">
+                                  <Building2 className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
+                                  <span className="truncate text-zinc-700 dark:text-zinc-300" title={agency.address}>{agency.address}</span>
+                                </div>
+                                <div className="flex items-center space-x-1.5 truncate">
+                                  <Globe className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
+                                  <a
+                                    href={agency.url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-blue-500 hover:underline truncate"
+                                  >
+                                    {agency.url.replace(/^https?:\/\//, '')}
+                                  </a>
+                                </div>
+                                <div className="flex items-center space-x-1.5 truncate">
+                                  <Mail className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
+                                  <span className="truncate text-zinc-700 dark:text-zinc-300" title={`Contact: ${agency.contactEmail}`}>
+                                    Contact: <a href={`mailto:${agency.contactEmail}`} className="text-blue-600 dark:text-blue-400 hover:underline">{agency.contactEmail}</a>
+                                  </span>
+                                </div>
+                                <div className="flex items-center space-x-1.5 truncate">
+                                  <Mail className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
+                                  <span className="truncate text-zinc-700 dark:text-zinc-300" title={`Finance: ${agency.financeEmail}`}>
+                                    Finance: <a href={`mailto:${agency.financeEmail}`} className="text-blue-600 dark:text-blue-400 hover:underline">{agency.financeEmail}</a>
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="flex sm:flex-col gap-1.5 shrink-0 self-end sm:self-start">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEditingAgencyId(agency.id);
+                                  setEditAgencyField_name(agency.name);
+                                  setEditAgencyField_address(agency.address);
+                                  setEditAgencyField_url(agency.url);
+                                  setEditAgencyField_contact(agency.contactEmail);
+                                  setEditAgencyField_finance(agency.financeEmail);
+                                }}
+                                className="p-1.5 rounded bg-zinc-50 dark:bg-[#1E1E1E] hover:bg-blue-50 dark:hover:bg-blue-950/20 text-zinc-400 hover:text-blue-600 border border-zinc-200 dark:border-[#2F2F2F] transition-colors cursor-pointer"
+                                title={`Edit ${agency.name}`}
+                              >
+                                <Pencil className="w-3.5 h-3.5" />
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (window.confirm(`Are you sure you want to delete agency "${agency.name}"? This will not delete projects associated with it, but will remove its contact details.`)) {
+                                    onDeleteAgency(agency.id);
+                                  }
+                                }}
+                                className="p-1.5 rounded bg-zinc-50 dark:bg-[#1E1E1E] hover:bg-rose-50 dark:hover:bg-rose-950/20 text-zinc-400 hover:text-rose-600 border border-zinc-200 dark:border-[#2F2F2F] transition-colors cursor-pointer"
+                                title={`Delete ${agency.name}`}
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Add Project Form Drawer/Card */}
       {showForm && (
@@ -898,21 +1337,71 @@ export default function ProjectManager({ projects, entries, onAddProject, onEdit
             <button
               type="button"
               onClick={() => setShowForm(false)}
-              className="text-xs text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 font-mono cursor-pointer"
+              className="text-xs text-zinc-400 hover:text-zinc-650 dark:hover:text-zinc-250 font-mono cursor-pointer"
             >
               Cancel
             </button>
           </div>
 
           {error && (
-            <div className="p-3 text-xs bg-rose-50 dark:bg-rose-950/20 border border-rose-200 dark:border-rose-900/50 text-rose-600 dark:text-rose-400 rounded-lg flex items-start space-x-2">
+            <div className="p-3 text-xs bg-rose-50 dark:bg-rose-950/20 border border-rose-200 dark:border-rose-900/50 text-rose-600 dark:text-rose-450 rounded-lg flex items-start space-x-2">
               <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
               <span>{error}</span>
             </div>
           )}
 
+          {/* Form Fields arranged EXACTLY as: Agency name, brand client, project title, then start date, end date, estimate hours, hourly rate */}
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-            <div className="space-y-1 sm:col-span-2 md:col-span-1">
+            
+            {/* 1. Agency name (Select Dropdown) */}
+            <div className="space-y-1">
+              <label className="text-xs font-mono font-medium text-zinc-500 dark:text-gray-400 flex items-center justify-between">
+                <span>Agency Name</span>
+                {agencies.length === 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowAgencyPanel(true);
+                      window.scrollTo({ top: 120, behavior: 'smooth' });
+                    }}
+                    className="text-[10px] text-blue-500 hover:underline"
+                  >
+                    + Register Agency first
+                  </button>
+                )}
+              </label>
+              <select
+                value={agencyName}
+                onChange={e => setAgencyName(e.target.value)}
+                className="w-full py-1.5 px-3 rounded-lg border border-zinc-200 dark:border-[#2F2F2F] bg-white dark:bg-[#191919] text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 dark:focus:ring-blue-500 text-zinc-800 dark:text-[#E0E0E0] cursor-pointer"
+              >
+                <option value="">-- Select Agency --</option>
+                {agencies.map(a => (
+                  <option key={a.id} value={a.name}>{a.name}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* 2. Brand Client */}
+            <div className="space-y-1">
+              <label className="text-xs font-mono font-medium text-zinc-500 dark:text-gray-400">Brand Client</label>
+              <input
+                type="text"
+                value={brandName}
+                onChange={e => setBrandName(e.target.value)}
+                placeholder="e.g. Lucky Strike"
+                list="brand-names-list"
+                className="w-full py-1.5 px-3 rounded-lg border border-zinc-200 dark:border-[#2F2F2F] bg-white dark:bg-[#191919] text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 dark:focus:ring-blue-500 text-zinc-800 dark:text-[#E0E0E0]"
+              />
+              <datalist id="brand-names-list">
+                {uniqueBrandNames.map(name => (
+                  <option key={name} value={name} />
+                ))}
+              </datalist>
+            </div>
+
+            {/* 3. Project Title */}
+            <div className="space-y-1">
               <label className="text-xs font-mono font-medium text-zinc-500 dark:text-gray-400">Project Title</label>
               <input
                 type="text"
@@ -923,52 +1412,7 @@ export default function ProjectManager({ projects, entries, onAddProject, onEdit
               />
             </div>
 
-            <div className="space-y-1">
-              <label className="text-xs font-mono font-medium text-zinc-500 dark:text-gray-400">Agency Name</label>
-              <input
-                type="text"
-                value={agencyName}
-                onChange={e => setAgencyName(e.target.value)}
-                placeholder="e.g. Sterling Cooper"
-                className="w-full py-1.5 px-3 rounded-lg border border-zinc-200 dark:border-[#2F2F2F] bg-white dark:bg-[#191919] text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 dark:focus:ring-blue-500 text-zinc-800 dark:text-[#E0E0E0]"
-              />
-            </div>
-
-            <div className="space-y-1">
-              <label className="text-xs font-mono font-medium text-zinc-500 dark:text-gray-400">Brand Client</label>
-              <input
-                type="text"
-                value={brandName}
-                onChange={e => setBrandName(e.target.value)}
-                placeholder="e.g. Lucky Strike"
-                className="w-full py-1.5 px-3 rounded-lg border border-zinc-200 dark:border-[#2F2F2F] bg-white dark:bg-[#191919] text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 dark:focus:ring-blue-500 text-zinc-800 dark:text-[#E0E0E0]"
-              />
-            </div>
-
-            <div className="space-y-1">
-              <label className="text-xs font-mono font-medium text-zinc-500 dark:text-gray-400">Estimated Hours (Budget)</label>
-              <input
-                type="number"
-                value={estimatedHours}
-                onChange={e => setEstimatedHours(e.target.value)}
-                placeholder="e.g. 40"
-                min="1"
-                className="w-full py-1.5 px-3 rounded-lg border border-zinc-200 dark:border-[#2F2F2F] bg-white dark:bg-[#191919] text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 dark:focus:ring-blue-500 font-mono text-zinc-800 dark:text-[#E0E0E0]"
-              />
-            </div>
-
-            <div className="space-y-1">
-              <label className="text-xs font-mono font-medium text-zinc-500 dark:text-gray-400">Hourly Rate (£/hr)</label>
-              <input
-                type="number"
-                value={rate}
-                onChange={e => setRate(e.target.value)}
-                placeholder="e.g. 100"
-                min="0"
-                className="w-full py-1.5 px-3 rounded-lg border border-zinc-200 dark:border-[#2F2F2F] bg-white dark:bg-[#191919] text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 dark:focus:ring-blue-500 font-mono text-zinc-800 dark:text-[#E0E0E0]"
-              />
-            </div>
-
+            {/* 4. Official Start Date */}
             <div className="space-y-1">
               <label className="text-xs font-mono font-medium text-zinc-500 dark:text-gray-400">Official Start Date</label>
               <input
@@ -979,6 +1423,7 @@ export default function ProjectManager({ projects, entries, onAddProject, onEdit
               />
             </div>
 
+            {/* 5. Impending Deadline (End Date) */}
             <div className="space-y-1">
               <label className="text-xs font-mono font-medium text-zinc-500 dark:text-gray-400">Impending Deadline (End Date)</label>
               <input
@@ -989,27 +1434,47 @@ export default function ProjectManager({ projects, entries, onAddProject, onEdit
               />
             </div>
 
+            {/* 6. Estimated Hours */}
             <div className="space-y-1">
-              <label className="text-xs font-mono font-medium text-zinc-500 dark:text-gray-400">Budget Hours (Float, Nullable)</label>
+              <label className="text-xs font-mono font-medium text-zinc-500 dark:text-gray-400">Estimated Hours</label>
               <input
                 type="number"
-                step="0.1"
-                value={budgetHours}
-                onChange={e => setBudgetHours(e.target.value)}
-                placeholder="e.g. 50.5 (Defaults to Est. Hours)"
+                value={estimatedHours}
+                onChange={e => setEstimatedHours(e.target.value)}
+                placeholder="e.g. 40"
+                min="1"
                 className="w-full py-1.5 px-3 rounded-lg border border-zinc-200 dark:border-[#2F2F2F] bg-white dark:bg-[#191919] text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 dark:focus:ring-blue-500 font-mono text-zinc-800 dark:text-[#E0E0E0]"
               />
             </div>
 
+            {/* 7. Day Rate */}
             <div className="space-y-1">
-              <label className="text-xs font-mono font-medium text-zinc-500 dark:text-gray-400">Burn Alert Thresholds (%)</label>
+              <label className="text-xs font-mono font-medium text-zinc-500 dark:text-gray-400">Day Rate (£/day)</label>
               <input
-                type="text"
-                value={alertThresholds}
-                onChange={e => setAlertThresholds(e.target.value)}
-                placeholder="e.g. 50, 75, 90, 100"
+                type="number"
+                value={dayRate}
+                onChange={e => setDayRate(e.target.value)}
+                placeholder="e.g. 500"
+                min="0"
                 className="w-full py-1.5 px-3 rounded-lg border border-zinc-200 dark:border-[#2F2F2F] bg-white dark:bg-[#191919] text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 dark:focus:ring-blue-500 font-mono text-zinc-800 dark:text-[#E0E0E0]"
               />
+            </div>
+
+            {/* 8. Hours in a Day */}
+            <div className="space-y-1">
+              <label className="text-xs font-mono font-medium text-zinc-500 dark:text-gray-400">Hours in a Day</label>
+              <select
+                value={hoursInDay}
+                onChange={e => setHoursInDay(e.target.value)}
+                className="w-full py-1.5 px-3 rounded-lg border border-zinc-200 dark:border-[#2F2F2F] bg-white dark:bg-[#191919] text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 dark:focus:ring-blue-500 font-mono text-zinc-800 dark:text-[#E0E0E0] cursor-pointer"
+              >
+                <option value="6">6 hours</option>
+                <option value="7">7 hours</option>
+                <option value="7.5">7.5 hours</option>
+                <option value="8">8 hours</option>
+                <option value="8.5">8.5 hours</option>
+                <option value="9">9 hours</option>
+              </select>
             </div>
 
             <div className="flex items-center space-x-2 pt-5">
@@ -1093,12 +1558,16 @@ export default function ProjectManager({ projects, entries, onAddProject, onEdit
                     <div className="grid grid-cols-2 gap-2">
                       <div className="space-y-1">
                         <label className="text-[10px] font-mono font-medium text-zinc-500">Agency Name</label>
-                        <input
-                          type="text"
+                        <select
                           value={editAgencyName}
                           onChange={e => setEditAgencyName(e.target.value)}
-                          className="w-full py-1 px-2.5 text-xs rounded border border-zinc-200 dark:border-[#2F2F2F] bg-white dark:bg-[#191919] text-zinc-800 dark:text-[#E0E0E0] focus:outline-none"
-                        />
+                          className="w-full py-1.5 px-2.5 text-xs rounded border border-zinc-200 dark:border-[#2F2F2F] bg-white dark:bg-[#191919] text-zinc-800 dark:text-[#E0E0E0] focus:outline-none cursor-pointer"
+                        >
+                          <option value="">-- Select Agency --</option>
+                          {agencies.map(a => (
+                            <option key={a.id} value={a.name}>{a.name}</option>
+                          ))}
+                        </select>
                       </div>
                       <div className="space-y-1">
                         <label className="text-[10px] font-mono font-medium text-zinc-500">Brand Client</label>
@@ -1106,8 +1575,14 @@ export default function ProjectManager({ projects, entries, onAddProject, onEdit
                           type="text"
                           value={editBrandName}
                           onChange={e => setEditBrandName(e.target.value)}
-                          className="w-full py-1 px-2.5 text-xs rounded border border-zinc-200 dark:border-[#2F2F2F] bg-white dark:bg-[#191919] text-zinc-800 dark:text-[#E0E0E0] focus:outline-none"
+                          list="brand-names-list-edit"
+                          className="w-full py-1.5 px-2.5 text-xs rounded border border-zinc-200 dark:border-[#2F2F2F] bg-white dark:bg-[#191919] text-zinc-800 dark:text-[#E0E0E0] focus:outline-none"
                         />
+                        <datalist id="brand-names-list-edit">
+                          {uniqueBrandNames.map(name => (
+                            <option key={name} value={name} />
+                          ))}
+                        </datalist>
                       </div>
                     </div>
 
@@ -1122,13 +1597,31 @@ export default function ProjectManager({ projects, entries, onAddProject, onEdit
                         />
                       </div>
                       <div className="space-y-1">
-                        <label className="text-[10px] font-mono font-medium text-zinc-500">Rate (£/hr)</label>
+                        <label className="text-[10px] font-mono font-medium text-zinc-500">Day Rate (£/day)</label>
                         <input
                           type="number"
-                          value={editRate}
-                          onChange={e => setEditRate(e.target.value)}
+                          value={editDayRate}
+                          onChange={e => setEditDayRate(e.target.value)}
                           className="w-full py-1 px-2.5 text-xs font-mono rounded border border-zinc-200 dark:border-[#2F2F2F] bg-white dark:bg-[#191919] text-zinc-800 dark:text-[#E0E0E0] focus:outline-none"
                         />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-mono font-medium text-zinc-500">Hours in a Day</label>
+                        <select
+                          value={editHoursInDay}
+                          onChange={e => setEditHoursInDay(e.target.value)}
+                          className="w-full py-1.5 px-2 px-2.5 text-xs rounded border border-zinc-200 dark:border-[#2F2F2F] bg-white dark:bg-[#191919] text-zinc-800 dark:text-[#E0E0E0] focus:outline-none cursor-pointer"
+                        >
+                          <option value="6">6 hours</option>
+                          <option value="7">7 hours</option>
+                          <option value="7.5">7.5 hours</option>
+                          <option value="8">8 hours</option>
+                          <option value="8.5">8.5 hours</option>
+                          <option value="9">9 hours</option>
+                        </select>
                       </div>
                     </div>
 
@@ -1163,29 +1656,7 @@ export default function ProjectManager({ projects, entries, onAddProject, onEdit
                       />
                     </div>
 
-                    <div className="grid grid-cols-2 gap-2">
-                      <div className="space-y-1">
-                        <label className="text-[10px] font-mono font-medium text-zinc-500">Budget Hours</label>
-                        <input
-                          type="number"
-                          step="0.1"
-                          value={editBudgetHours}
-                          onChange={e => setEditBudgetHours(e.target.value)}
-                          placeholder="Defaults to Est"
-                          className="w-full py-1 px-2.5 text-xs font-mono rounded border border-zinc-200 dark:border-[#2F2F2F] bg-white dark:bg-[#191919] text-zinc-800 dark:text-[#E0E0E0] focus:outline-none"
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <label className="text-[10px] font-mono font-medium text-zinc-500">Alert Thresholds (%)</label>
-                        <input
-                          type="text"
-                          value={editAlertThresholds}
-                          onChange={e => setEditAlertThresholds(e.target.value)}
-                          placeholder="e.g. 50, 75, 90, 100"
-                          className="w-full py-1 px-2.5 text-xs font-mono rounded border border-zinc-200 dark:border-[#2F2F2F] bg-white dark:bg-[#191919] text-zinc-800 dark:text-[#E0E0E0] focus:outline-none"
-                        />
-                      </div>
-                    </div>
+
 
                     <div className="flex items-center space-x-2 pt-1">
                       <input
@@ -1238,26 +1709,33 @@ export default function ProjectManager({ projects, entries, onAddProject, onEdit
             const elapsed = Date.now() - start.getTime();
             const timePercent = Math.min(100, Math.max(0, totalDuration > 0 ? (elapsed / totalDuration) * 100 : 0));
             
+            const agencyDetails = agencies.find(a => a.name.toLowerCase() === project.agencyName?.toLowerCase());
+            const isAgencyExpanded = expandedAgencyProjectId === project.id;
+
             return (
               <div
                 key={project.id}
-                className="flex flex-col justify-between p-5 rounded-xl border border-zinc-200 dark:border-[#2F2F2F] bg-white dark:bg-[#1F1F1F] shadow-sm hover:border-zinc-300 dark:hover:border-zinc-700 transition-colors"
+                className="flex flex-col justify-between p-5 rounded-xl border border-zinc-200 dark:border-[#2F2F2F] bg-white dark:bg-[#1F1F1F] shadow-sm hover:border-zinc-300 dark:hover:border-zinc-700 transition-all duration-200"
               >
                 {/* Header */}
                 <div className="space-y-1">
                   <div className="flex items-start justify-between">
-                    <div className="space-y-0.5">
+                    <div className="space-y-0.5 max-w-[80%]">
                       {/* Brand and Agency Client Tags */}
                       {(project.brandName || project.agencyName || project.isNonBillable) && (
-                        <div className="flex items-center space-x-1.5 text-[10px] uppercase font-bold font-mono text-blue-600 dark:text-blue-400">
-                          {project.isNonBillable && <span className="bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-350 px-1.5 py-0.5 rounded text-[9px] border border-zinc-200 dark:border-[#2F2F2F]">NON-BILLABLE</span>}
+                        <div className="flex flex-wrap items-center gap-1.5 text-[10px] uppercase font-bold font-mono text-blue-600 dark:text-blue-400">
+                          {project.isNonBillable && <span className="bg-zinc-100 dark:bg-zinc-850 text-zinc-600 dark:text-zinc-350 px-1.5 py-0.5 rounded text-[9px] border border-zinc-200 dark:border-[#2F2F2F]">NON-BILLABLE</span>}
                           {project.isNonBillable && (project.brandName || project.agencyName) && <span className="text-zinc-300 dark:text-zinc-700">•</span>}
-                          {project.agencyName && <span className="truncate max-w-[120px]">{project.agencyName}</span>}
+                          {project.agencyName && (
+                            <span className="bg-blue-50 dark:bg-blue-950/20 px-2 py-0.5 rounded border border-blue-150/45 dark:border-blue-900/10 text-[9.5px]">
+                              🏢 {project.agencyName}
+                            </span>
+                          )}
                           {project.agencyName && project.brandName && <span className="text-zinc-300 dark:text-zinc-700">•</span>}
-                          {project.brandName && <span className="truncate max-w-[120px]">{project.brandName}</span>}
+                          {project.brandName && <span className="truncate max-w-[120px] text-zinc-600 dark:text-zinc-350">{project.brandName}</span>}
                         </div>
                       )}
-                      <h3 className="font-bold text-zinc-900 dark:text-white font-mono tracking-tight hover:underline cursor-pointer">
+                      <h3 className="font-bold text-zinc-900 dark:text-white font-mono tracking-tight hover:underline cursor-pointer pt-0.5">
                         {project.name}
                       </h3>
                     </div>
@@ -1283,6 +1761,49 @@ export default function ProjectManager({ projects, entries, onAddProject, onEdit
                       "{project.description}"
                     </p>
                   )}
+
+                  {/* Interactive Agency Card dropdown */}
+                  {agencyDetails && (
+                    <div className="pt-2">
+                      <button
+                        type="button"
+                        onClick={() => setExpandedAgencyProjectId(isAgencyExpanded ? null : project.id)}
+                        className="text-blue-500 hover:text-blue-650 dark:hover:text-blue-400 flex items-center space-x-1 cursor-pointer font-bold font-mono text-[9.5px]"
+                      >
+                        <Building2 className="w-3 h-3 text-blue-500 shrink-0" />
+                        <span>{isAgencyExpanded ? 'Hide Agency Details' : `Show Agency Details (${project.agencyName})`}</span>
+                        <ChevronRight className={`w-2.5 h-2.5 transition-transform ${isAgencyExpanded ? 'rotate-90' : ''}`} />
+                      </button>
+                      
+                      <AnimatePresence>
+                        {isAgencyExpanded && (
+                          <motion.div
+                            initial={{ opacity: 0, height: 0 }}
+                            animate={{ opacity: 1, height: 'auto' }}
+                            exit={{ opacity: 0, height: 0 }}
+                            className="overflow-hidden mt-1.5 p-2 rounded bg-zinc-50 dark:bg-[#1A1A1A] border border-zinc-150 dark:border-zinc-800/80 space-y-1 text-[10.5px] font-mono text-zinc-600 dark:text-zinc-350"
+                          >
+                            <div className="flex items-start space-x-1.5">
+                              <span className="text-[9.5px] text-zinc-400 font-bold w-14 shrink-0 uppercase">Address:</span>
+                              <span className="text-zinc-800 dark:text-zinc-250 truncate" title={agencyDetails.address}>{agencyDetails.address}</span>
+                            </div>
+                            <div className="flex items-start space-x-1.5">
+                              <span className="text-[9.5px] text-zinc-400 font-bold w-14 shrink-0 uppercase">Website:</span>
+                              <a href={agencyDetails.url} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline truncate">{agencyDetails.url.replace(/^https?:\/\//, '')}</a>
+                            </div>
+                            <div className="flex items-start space-x-1.5">
+                              <span className="text-[9.5px] text-zinc-400 font-bold w-14 shrink-0 uppercase">Contact:</span>
+                              <a href={`mailto:${agencyDetails.contactEmail}`} className="text-zinc-700 dark:text-zinc-250 hover:underline truncate">{agencyDetails.contactEmail}</a>
+                            </div>
+                            <div className="flex items-start space-x-1.5">
+                              <span className="text-[9.5px] text-zinc-400 font-bold w-14 shrink-0 uppercase">Finance:</span>
+                              <a href={`mailto:${agencyDetails.financeEmail}`} className="text-zinc-700 dark:text-zinc-250 hover:underline truncate">{agencyDetails.financeEmail}</a>
+                            </div>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </div>
+                  )}
                 </div>
 
                 {/* Potential Earnings Backlog & Rate Widget */}
@@ -1294,7 +1815,9 @@ export default function ProjectManager({ projects, entries, onAddProject, onEdit
                   <div className="grid grid-cols-2 gap-3 p-3 bg-zinc-50/50 dark:bg-[#252525]/30 rounded-xl border border-zinc-100 dark:border-[#2F2F2F] my-3">
                     <div className="space-y-0.5">
                       <p className="text-[9px] uppercase tracking-wider font-mono text-zinc-400 dark:text-gray-500">Rate</p>
-                      <p className="text-xs font-bold font-mono text-zinc-950 dark:text-white">£{rateVal}/hr</p>
+                      <p className="text-xs font-bold font-mono text-zinc-950 dark:text-white">
+                        {project.dayRate ? `£${project.dayRate}/day (${project.hoursInDay}h)` : `£${rateVal}/hr`}
+                      </p>
                     </div>
                     <div className="space-y-0.5">
                       <p className="text-[9px] uppercase tracking-wider font-mono text-zinc-400 dark:text-gray-500">Actual Earned</p>

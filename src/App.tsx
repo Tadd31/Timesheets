@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { Project, TimeEntry, BudgetAlert } from './types';
+import { Project, TimeEntry, BudgetAlert, Agency } from './types';
 import {
   getProjects,
   saveProjects,
@@ -13,7 +13,9 @@ import {
   getDarkMode,
   saveDarkMode,
   getAlerts,
-  saveAlerts
+  saveAlerts,
+  getAgencies,
+  saveAgencies
 } from './utils/storage';
 
 // Component imports
@@ -44,7 +46,10 @@ import {
   RefreshCw,
   ExternalLink,
   LogOut,
-  AlertCircle
+  AlertCircle,
+  Lock,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 
 import { motion, AnimatePresence } from 'motion/react';
@@ -57,12 +62,42 @@ import {
   createSpreadsheet,
   syncDataToSheet,
   loadDataFromSheet,
-  getAccessToken
+  getAccessToken,
+  writeHeaders
 } from './utils/googleAuth';
 
 export default function App() {
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(true);
+  const [passwordInput, setPasswordInput] = useState<string>('');
+  const [showPassword, setShowPassword] = useState<boolean>(false);
+  const [rememberMe, setRememberMe] = useState<boolean>(true);
+  const [loginError, setLoginError] = useState<string>('');
+
+  const handleLogin = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (passwordInput === '2432') {
+      setIsAuthenticated(true);
+      setLoginError('');
+      if (rememberMe) {
+        localStorage.setItem('timesheet_authenticated', 'true');
+      } else {
+        sessionStorage.setItem('timesheet_authenticated', 'true');
+      }
+    } else {
+      setLoginError('Incorrect passcode. The auditors remain suspicious.');
+    }
+  };
+
+  const handleAppLogout = () => {
+    setIsAuthenticated(false);
+    localStorage.removeItem('timesheet_authenticated');
+    sessionStorage.removeItem('timesheet_authenticated');
+    setPasswordInput('');
+  };
+
   const [projects, setProjects] = useState<Project[]>([]);
   const [entries, setEntries] = useState<TimeEntry[]>([]);
+  const [agencies, setAgencies] = useState<Agency[]>([]);
   const [isDarkMode, setIsDarkMode] = useState<boolean>(true);
   const [activeTab, setActiveTab] = useState<'timesheet' | 'projects' | 'reports'>('timesheet');
   const [selectedDate, setSelectedDate] = useState<string>(() => {
@@ -82,9 +117,67 @@ export default function App() {
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [spreadsheetId, setSpreadsheetId] = useState<string | null>(null);
   const [syncingState, setSyncingState] = useState<'idle' | 'syncing' | 'synced' | 'error'>('idle');
+  const [lastSyncedTime, setLastSyncedTime] = useState<string | null>(() => {
+    return localStorage.getItem('timesheet_recorder_last_synced_time');
+  });
   const [sheetsUrl, setSheetsUrl] = useState<string | null>(null);
   const [showSyncPanel, setShowSyncPanel] = useState<boolean>(false);
   const [showSyncInfoModal, setShowSyncInfoModal] = useState<boolean>(false);
+  const [customSheetInput, setCustomSheetInput] = useState<string>('');
+  const [customSheetError, setCustomSheetError] = useState<string>('');
+
+  const updateLastSyncedTime = () => {
+    const now = new Date().toLocaleString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+    setLastSyncedTime(now);
+    localStorage.setItem('timesheet_recorder_last_synced_time', now);
+  };
+
+  const handleConnectCustomSheet = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!customSheetInput.trim()) {
+      setCustomSheetError('Please enter a valid Spreadsheet URL or ID.');
+      return;
+    }
+
+    const match = customSheetInput.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+    const id = match && match[1] ? match[1] : customSheetInput.trim();
+
+    if (!id || id.length < 10) {
+      setCustomSheetError('Could not parse a valid spreadsheet ID.');
+      return;
+    }
+
+    try {
+      localStorage.setItem('timesheet_recorder_spreadsheet_id', id);
+      setSpreadsheetId(id);
+      setSheetsUrl(`https://docs.google.com/spreadsheets/d/${id}`);
+      setCustomSheetError('');
+      setCustomSheetInput('');
+      
+      const token = accessToken || await getAccessToken();
+      if (token) {
+        setSyncingState('syncing');
+        await writeHeaders(token, id);
+        await syncDataToSheet(token, id, projects, entries);
+        setSyncingState('synced');
+        updateLastSyncedTime();
+        alert("Successfully linked custom spreadsheet! Existing projects and entries synced.");
+      } else {
+        alert("Spreadsheet ID override set successfully! Connecting a Google account will now synchronize directly to this sheet.");
+      }
+    } catch (err: any) {
+      console.error('Failed to link custom spreadsheet:', err);
+      setCustomSheetError(err.message || 'Verification failed. Make sure the spreadsheet exists and is accessible.');
+      setSyncingState('error');
+    }
+  };
 
   // Initialize spreadsheet connections
   const initializeSpreadsheet = async (token: string, userObj?: User) => {
@@ -113,6 +206,7 @@ export default function App() {
             setEntries(loaded.entries);
             saveEntries(loaded.entries);
             setSyncingState('synced');
+            updateLastSyncedTime();
             return;
           }
         }
@@ -120,6 +214,7 @@ export default function App() {
         // Otherwise sync what we have up to sheets
         await syncDataToSheet(token, sheetId, localProjects, localEntries);
         setSyncingState('synced');
+        updateLastSyncedTime();
       } else {
         setSyncingState('error');
       }
@@ -129,16 +224,18 @@ export default function App() {
     }
   };
 
-  const handleGoogleLogin = async () => {
+  const handleGoogleLogin = async (useRedirect = false) => {
     setSyncingState('syncing');
     try {
-      const res = await googleSignIn();
+      const res = await googleSignIn(useRedirect);
       if (res) {
         setGoogleUser(res.user);
         setAccessToken(res.accessToken);
         await initializeSpreadsheet(res.accessToken, res.user);
       } else {
-        setSyncingState('error');
+        if (!useRedirect) {
+          setSyncingState('error');
+        }
       }
     } catch (err) {
       console.error('Login failed:', err);
@@ -154,7 +251,9 @@ export default function App() {
       setSpreadsheetId(null);
       setSheetsUrl(null);
       setSyncingState('idle');
+      setLastSyncedTime(null);
       localStorage.removeItem('timesheet_recorder_spreadsheet_id');
+      localStorage.removeItem('timesheet_recorder_last_synced_time');
     } catch (err) {
       console.error('Logout failed:', err);
     }
@@ -171,44 +270,20 @@ export default function App() {
       const ents = entList || entries;
       await syncDataToSheet(token, sheetId, projs, ents);
       setSyncingState('synced');
+      updateLastSyncedTime();
     } catch (err) {
       console.error('Auto-sync failed:', err);
       setSyncingState('error');
     }
   };
 
-  const forceBackupToSheets = async () => {
+  const safeSyncRefresh = async () => {
     const token = accessToken || await getAccessToken();
     const sheetId = spreadsheetId || localStorage.getItem('timesheet_recorder_spreadsheet_id');
     if (!token || !sheetId) {
       alert("No active Google connection detected.");
       return;
     }
-    const confirmBackup = window.confirm("Do you want to force back up all current local timesheets and projects to Google Sheets? This will overwrite the spreadsheet's existing records.");
-    if (!confirmBackup) return;
-
-    setSyncingState('syncing');
-    try {
-      await syncDataToSheet(token, sheetId, projects, entries);
-      setSyncingState('synced');
-      alert("Manual backup complete! Your spreadsheet is fully updated.");
-    } catch (err: any) {
-      console.error('Manual backup failed:', err);
-      setSyncingState('error');
-      alert(`Manual backup failed: ${err.message || err}`);
-    }
-  };
-
-  const forceRestoreFromSheets = async () => {
-    const token = accessToken || await getAccessToken();
-    const sheetId = spreadsheetId || localStorage.getItem('timesheet_recorder_spreadsheet_id');
-    if (!token || !sheetId) {
-      alert("No active Google connection detected.");
-      return;
-    }
-    const confirmRestore = window.confirm("Are you sure you want to restore from Google Sheets? This will replace your local browser's cache with the data in the spreadsheet.");
-    if (!confirmRestore) return;
-
     setSyncingState('syncing');
     try {
       const loaded = await loadDataFromSheet(token, sheetId);
@@ -217,11 +292,11 @@ export default function App() {
       setEntries(loaded.entries);
       saveEntries(loaded.entries);
       setSyncingState('synced');
-      alert(`Data restoration complete! Restored ${loaded.projects.length} projects and ${loaded.entries.length} timesheet entries.`);
+      updateLastSyncedTime();
     } catch (err: any) {
-      console.error('Data restoration failed:', err);
+      console.error('Refresh sync failed:', err);
       setSyncingState('error');
-      alert(`Data restoration failed: ${err.message || err}`);
+      alert(`Sync refresh failed. This can happen if your internet connection is down or the spreadsheet has been deleted. Error: ${err.message || err}`);
     }
   };
 
@@ -240,6 +315,7 @@ export default function App() {
     setProjects(getProjects());
     setEntries(getEntries());
     setAlerts(getAlerts());
+    setAgencies(getAgencies());
     
     const darkSetting = getDarkMode();
     setIsDarkMode(darkSetting);
@@ -247,6 +323,12 @@ export default function App() {
       document.documentElement.classList.add('dark');
     } else {
       document.documentElement.classList.remove('dark');
+    }
+
+    const savedSheetId = localStorage.getItem('timesheet_recorder_spreadsheet_id');
+    if (savedSheetId) {
+      setSpreadsheetId(savedSheetId);
+      setSheetsUrl(`https://docs.google.com/spreadsheets/d/${savedSheetId}`);
     }
 
     // Connect to Google session silently if available
@@ -262,15 +344,29 @@ export default function App() {
     );
   }, []);
 
-  // Auto sync to Google Sheets whenever projects or entries change
+  // Auto-refresh/polling Google Sheets data for multi-user collaboration
   useEffect(() => {
-    if (googleUser && accessToken && spreadsheetId) {
-      const timer = setTimeout(() => {
-        triggerSheetSync();
-      }, 1500); // Debounce sync by 1.5s to avoid hitting Google API limits
-      return () => clearTimeout(timer);
-    }
-  }, [projects, entries]);
+    if (!googleUser || !accessToken || !spreadsheetId) return;
+
+    // Poll every 30 seconds to fetch other teammates' changes
+    const interval = setInterval(async () => {
+      // Only fetch if we are not currently writing/syncing
+      if (syncingState === 'idle' || syncingState === 'synced') {
+        try {
+          const loaded = await loadDataFromSheet(accessToken, spreadsheetId);
+          setProjects(loaded.projects);
+          setEntries(loaded.entries);
+          saveProjects(loaded.projects);
+          saveEntries(loaded.entries);
+          updateLastSyncedTime();
+        } catch (err) {
+          console.warn('Silent collaboration background reload failed:', err);
+        }
+      }
+    }, 30000);
+
+    return () => clearInterval(interval);
+  }, [googleUser, accessToken, spreadsheetId, syncingState]);
 
   // Sync dark mode setting
   const toggleDarkMode = () => {
@@ -284,39 +380,9 @@ export default function App() {
     }
   };
 
-  // Add project handler
-  const handleAddProject = (newProj: Omit<Project, 'id' | 'createdAt'>) => {
-    const project: Project = {
-      ...newProj,
-      id: `proj-${Date.now()}`,
-      createdAt: new Date().toISOString()
-    };
-    const updated = [...projects, project];
-    setProjects(updated);
-    saveProjects(updated);
-  };
-
-  // Edit project handler
-  const handleEditProject = (updatedProj: Project) => {
-    const updated = projects.map(p => p.id === updatedProj.id ? updatedProj : p);
-    setProjects(updated);
-    saveProjects(updated);
-  };
-
-  // Delete project handler (cascades to delete all entries for that project)
-  const handleDeleteProject = (projectId: string) => {
-    const updatedProjects = projects.filter(p => p.id !== projectId);
-    const updatedEntries = entries.filter(e => e.projectId !== projectId);
-    
-    setProjects(updatedProjects);
-    saveProjects(updatedProjects);
-    setEntries(updatedEntries);
-    saveEntries(updatedEntries);
-  };
-
   // Check budget alert system hook
-  const checkBudgetAlerts = (projectId: string, updatedEntries: TimeEntry[]) => {
-    const project = projects.find(p => p.id === projectId);
+  const checkBudgetAlerts = (projectId: string, updatedEntries: TimeEntry[], projectsToUse: Project[] = projects) => {
+    const project = projectsToUse.find(p => p.id === projectId);
     if (!project || project.isNonBillable) return;
 
     const budgetToUse = project.budget_hours !== undefined && project.budget_hours !== null ? project.budget_hours : project.estimatedHours;
@@ -358,6 +424,164 @@ export default function App() {
     }
   };
 
+  // Transaction-safe, multi-user mutation coordinator for Google Sheets
+  const applyMutation = async (
+    mutation:
+      | { type: 'addProject'; project: Project }
+      | { type: 'editProject'; project: Project }
+      | { type: 'deleteProject'; projectId: string }
+      | { type: 'addEntry'; entry: TimeEntry }
+      | { type: 'editEntry'; entry: TimeEntry }
+      | { type: 'deleteEntry'; entryId: string }
+  ) => {
+    const token = accessToken || await getAccessToken();
+    const sheetId = spreadsheetId || localStorage.getItem('timesheet_recorder_spreadsheet_id');
+
+    // If online (logged in & spreadsheet connected)
+    if (token && sheetId) {
+      setSyncingState('syncing');
+      try {
+        // 1. Fetch latest data from sheet to prevent overwriting other users' updates
+        const loaded = await loadDataFromSheet(token, sheetId);
+        
+        let updatedProjects = [...loaded.projects];
+        let updatedEntries = [...loaded.entries];
+
+        // 2. Apply mutation to the fresh database state
+        if (mutation.type === 'addProject') {
+          // Add createdBy name
+          const projectWithCreator = {
+            ...mutation.project,
+            createdBy: googleUser?.displayName || googleUser?.email || 'Anonymous Teammate'
+          };
+          updatedProjects.push(projectWithCreator);
+        } else if (mutation.type === 'editProject') {
+          updatedProjects = updatedProjects.map(p => p.id === mutation.project.id ? mutation.project : p);
+        } else if (mutation.type === 'deleteProject') {
+          updatedProjects = updatedProjects.filter(p => p.id !== mutation.projectId);
+          updatedEntries = updatedEntries.filter(e => e.projectId !== mutation.projectId);
+        } else if (mutation.type === 'addEntry') {
+          // Add loggedByName & loggedByEmail
+          const entryWithUser = {
+            ...mutation.entry,
+            loggedByName: googleUser?.displayName || 'Anonymous Teammate',
+            loggedByEmail: googleUser?.email || '',
+            projectName: updatedProjects.find(p => p.id === mutation.entry.projectId)?.name || ''
+          };
+          updatedEntries.push(entryWithUser);
+        } else if (mutation.type === 'editEntry') {
+          updatedEntries = updatedEntries.map(e => e.id === mutation.entry.id ? {
+            ...mutation.entry,
+            projectName: updatedProjects.find(p => p.id === mutation.entry.projectId)?.name || ''
+          } : e);
+        } else if (mutation.type === 'deleteEntry') {
+          updatedEntries = updatedEntries.filter(e => e.id !== mutation.entryId);
+        }
+
+        // 3. Sync merged data back to Google Sheet
+        await syncDataToSheet(token, sheetId, updatedProjects, updatedEntries);
+
+        // 4. Update state with merged results
+        setProjects(updatedProjects);
+        setEntries(updatedEntries);
+        saveProjects(updatedProjects);
+        saveEntries(updatedEntries);
+
+        setSyncingState('synced');
+        updateLastSyncedTime();
+
+        // Run budget alerting if relevant
+        if (mutation.type === 'addEntry') {
+          checkBudgetAlerts(mutation.entry.projectId, updatedEntries, updatedProjects);
+        } else if (mutation.type === 'editEntry') {
+          checkBudgetAlerts(mutation.entry.projectId, updatedEntries, updatedProjects);
+        }
+      } catch (err) {
+        console.error('Online transaction sync mutation failed:', err);
+        setSyncingState('error');
+        alert("Failed to write to Google Sheets. Your teammates might have lock files or there is a connection issue. Please retry.");
+      }
+    } else {
+      // Offline/Demo/Fallback mode - apply only locally
+      if (mutation.type === 'addProject') {
+        const updated = [...projects, mutation.project];
+        setProjects(updated);
+        saveProjects(updated);
+      } else if (mutation.type === 'editProject') {
+        const updated = projects.map(p => p.id === mutation.project.id ? mutation.project : p);
+        setProjects(updated);
+        saveProjects(updated);
+      } else if (mutation.type === 'deleteProject') {
+        const updatedProjects = projects.filter(p => p.id !== mutation.projectId);
+        const updatedEntries = entries.filter(e => e.projectId !== mutation.projectId);
+        setProjects(updatedProjects);
+        saveProjects(updatedProjects);
+        setEntries(updatedEntries);
+        saveEntries(updatedEntries);
+      } else if (mutation.type === 'addEntry') {
+        const updated = [...entries, mutation.entry];
+        setEntries(updated);
+        saveEntries(updated);
+        checkBudgetAlerts(mutation.entry.projectId, updated, projects);
+      } else if (mutation.type === 'editEntry') {
+        const updated = entries.map(e => e.id === mutation.entry.id ? mutation.entry : e);
+        setEntries(updated);
+        saveEntries(updated);
+        checkBudgetAlerts(mutation.entry.projectId, updated, projects);
+      } else if (mutation.type === 'deleteEntry') {
+        const updated = entries.filter(e => e.id !== mutation.entryId);
+        setEntries(updated);
+        saveEntries(updated);
+      }
+    }
+  };
+
+  // Add project handler
+  const handleAddProject = async (newProj: Omit<Project, 'id' | 'createdAt'>) => {
+    const project: Project = {
+      ...newProj,
+      id: `proj-${Date.now()}`,
+      createdAt: new Date().toISOString()
+    };
+    await applyMutation({ type: 'addProject', project });
+  };
+
+  // Edit project handler
+  const handleEditProject = async (updatedProj: Project) => {
+    await applyMutation({ type: 'editProject', project: updatedProj });
+  };
+
+  // Delete project handler (cascades to delete all entries for that project)
+  const handleDeleteProject = async (projectId: string) => {
+    await applyMutation({ type: 'deleteProject', projectId });
+  };
+
+  // Add agency handler
+  const handleAddAgency = (newAgency: Omit<Agency, 'id' | 'createdAt'>) => {
+    const agency: Agency = {
+      ...newAgency,
+      id: `agency-${Date.now()}`,
+      createdAt: new Date().toISOString()
+    };
+    const updated = [...agencies, agency];
+    setAgencies(updated);
+    saveAgencies(updated);
+  };
+
+  // Delete agency handler
+  const handleDeleteAgency = (agencyId: string) => {
+    const updated = agencies.filter(a => a.id !== agencyId);
+    setAgencies(updated);
+    saveAgencies(updated);
+  };
+
+  // Edit agency handler
+  const handleEditAgency = (updatedAgency: Agency) => {
+    const updated = agencies.map(a => a.id === updatedAgency.id ? updatedAgency : a);
+    setAgencies(updated);
+    saveAgencies(updated);
+  };
+
   const handleDismissAlert = (alertId: string) => {
     const updated = alerts.map(a => a.id === alertId ? { ...a, dismissed: true } : a);
     setAlerts(updated);
@@ -365,46 +589,35 @@ export default function App() {
   };
 
   // Add timesheet entry
-  const handleAddEntry = (newEntry: Omit<TimeEntry, 'id' | 'createdAt'>) => {
+  const handleAddEntry = async (newEntry: Omit<TimeEntry, 'id' | 'createdAt'>) => {
     const entry: TimeEntry = {
       ...newEntry,
       id: `entry-${Date.now()}`,
       createdAt: new Date().toISOString()
     };
-    const updated = [...entries, entry];
-    setEntries(updated);
-    saveEntries(updated);
-    checkBudgetAlerts(entry.projectId, updated);
+    await applyMutation({ type: 'addEntry', entry });
   };
 
   // Edit timesheet entry
-  const handleEditEntry = (updatedEntry: TimeEntry) => {
-    const updated = entries.map(e => e.id === updatedEntry.id ? updatedEntry : e);
-    setEntries(updated);
-    saveEntries(updated);
-    checkBudgetAlerts(updatedEntry.projectId, updated);
+  const handleEditEntry = async (updatedEntry: TimeEntry) => {
+    await applyMutation({ type: 'editEntry', entry: updatedEntry });
   };
 
   // Delete timesheet entry
-  const handleDeleteEntry = (entryId: string) => {
+  const handleDeleteEntry = async (entryId: string) => {
     const entryToDelete = entries.find(e => e.id === entryId);
     if (entryToDelete) {
       setLastDeletedEntry(entryToDelete);
       setShowToast(true);
     }
-    const updated = entries.filter(e => e.id !== entryId);
-    setEntries(updated);
-    saveEntries(updated);
+    await applyMutation({ type: 'deleteEntry', entryId });
   };
 
   // Undo timesheet entry deletion
-  const handleUndoDelete = () => {
+  const handleUndoDelete = async () => {
     if (!lastDeletedEntry) return;
-    const updated = [...entries, lastDeletedEntry];
-    setEntries(updated);
-    saveEntries(updated);
+    await applyMutation({ type: 'addEntry', entry: lastDeletedEntry });
     setShowToast(false);
-    checkBudgetAlerts(lastDeletedEntry.projectId, updated);
     setLastDeletedEntry(null);
   };
 
@@ -426,6 +639,118 @@ export default function App() {
     saveEntries([]);
     alert("Shredder completed. The workspace is pristine. Please begin fabricating your next milestones immediately.");
   };
+
+  if (!isAuthenticated) {
+    return (
+      <div className={`min-h-screen flex items-center justify-center p-4 transition-colors duration-300 font-sans relative ${isDarkMode ? 'bg-[#191919] text-[#E0E0E0]' : 'bg-zinc-50 text-zinc-800'}`}>
+        {/* Ambient background decoration */}
+        <div className="absolute inset-0 bg-grid-black/[0.02] dark:bg-grid-white/[0.01] pointer-events-none" />
+        
+        {/* Floating Top-Right Theme Switcher */}
+        <div className="absolute top-4 right-4">
+          <button
+            onClick={toggleDarkMode}
+            className="p-2 rounded-lg border border-zinc-200 dark:border-[#2F2F2F] hover:bg-zinc-100 dark:hover:bg-[#2F2F2F] bg-white/95 dark:bg-[#1A1A1A]/95 text-zinc-500 dark:text-gray-400 cursor-pointer transition-colors shadow-sm"
+            title={isDarkMode ? "Enable Caffeine Light Mode" : "Enable Dark Mode"}
+          >
+            {isDarkMode ? <Sun className="w-4 h-4 text-amber-500" /> : <Moon className="w-4 h-4 text-zinc-600" />}
+          </button>
+        </div>
+
+        {/* Login Card */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4 }}
+          className="w-full max-w-md p-6 sm:p-8 rounded-2xl border border-zinc-200/80 dark:border-[#2F2F2F] bg-white dark:bg-[#1F1F1F] shadow-xl relative overflow-hidden font-mono"
+        >
+          {/* Decorative Top Accent Bar */}
+          <div className="absolute top-0 left-0 right-0 h-[3px] bg-gradient-to-r from-zinc-300 via-zinc-400 to-zinc-500 dark:from-zinc-700 dark:via-zinc-600 dark:to-zinc-800" />
+
+          <div className="space-y-6 text-center">
+            {/* Notion-style Icon */}
+            <div className="inline-block text-5xl p-4 bg-zinc-50 dark:bg-[#191919] rounded-2xl border border-zinc-200/60 dark:border-[#2F2F2F] shadow-sm select-none transform hover:scale-105 transition-transform">
+              🗄️
+            </div>
+
+            <div className="space-y-1.5">
+              <h1 className="text-2xl font-extrabold tracking-tight text-zinc-950 dark:text-white">
+                Timesheet Recorder V4.83
+              </h1>
+              <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                Your high-precision logs companion
+              </p>
+            </div>
+
+            <form onSubmit={handleLogin} className="space-y-4 text-left">
+              <div className="space-y-2">
+                <label className="text-[10px] uppercase tracking-wider font-bold text-zinc-400 dark:text-zinc-500">
+                  Secured Workspace Passcode
+                </label>
+                <div className="relative">
+                  <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-zinc-400 dark:text-zinc-500">
+                    <Lock className="w-4 h-4" />
+                  </span>
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    placeholder="••••"
+                    value={passwordInput}
+                    onChange={(e) => setPasswordInput(e.target.value)}
+                    className="w-full pl-9 pr-10 py-2.5 rounded-xl border border-zinc-200 dark:border-[#2F2F2F] bg-zinc-50 dark:bg-[#191919] text-zinc-850 dark:text-[#E0E0E0] placeholder-zinc-300 dark:placeholder-zinc-600 focus:outline-none focus:ring-2 focus:ring-zinc-300 dark:focus:ring-zinc-750 font-mono text-center tracking-widest text-lg transition-all"
+                    autoFocus
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute inset-y-0 right-0 pr-3 flex items-center text-zinc-400 hover:text-zinc-600 dark:text-zinc-500 dark:hover:text-zinc-300"
+                  >
+                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+
+              {/* Remember Me Toggle */}
+              <div className="flex items-center justify-between py-1">
+                <label className="flex items-center space-x-2 text-xs text-zinc-500 dark:text-zinc-400 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={rememberMe}
+                    onChange={(e) => setRememberMe(e.target.checked)}
+                    className="rounded border-zinc-300 dark:border-[#2F2F2F] text-zinc-600 focus:ring-0 cursor-pointer bg-zinc-50 dark:bg-[#191919]"
+                  />
+                  <span>Remember me on this laptop</span>
+                </label>
+              </div>
+
+              {/* Error Message */}
+              <AnimatePresence>
+                {loginError && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -5 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -5 }}
+                    className="p-3 rounded-lg bg-rose-50 dark:bg-rose-950/30 border border-rose-200/80 dark:border-rose-900/60 text-rose-700 dark:text-rose-400 text-xs flex items-start space-x-2"
+                  >
+                    <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                    <span>{loginError}</span>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              {/* Submit Button */}
+              <button
+                type="submit"
+                className="w-full py-2.5 rounded-xl bg-zinc-900 hover:bg-zinc-850 dark:bg-white dark:hover:bg-zinc-100 text-white dark:text-zinc-950 text-xs font-bold transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer shadow-md flex items-center justify-center space-x-2"
+              >
+                <ShieldCheck className="w-4 h-4" />
+                <span>Unlock Timesheets</span>
+              </button>
+            </form>
+          </div>
+        </motion.div>
+      </div>
+    );
+  }
 
   return (
     <div className={`min-h-screen bg-zinc-50 dark:bg-[#191919] text-zinc-800 dark:text-[#E0E0E0] transition-colors duration-300 pb-16 font-sans`}>
@@ -452,9 +777,9 @@ export default function App() {
           <div className="flex items-center space-x-1">
             {googleUser === null ? (
               <button
-                onClick={handleGoogleLogin}
+                onClick={() => setShowSyncPanel(true)}
                 className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg border border-zinc-250 dark:border-[#2F2F2F]/85 bg-white/95 dark:bg-[#1A1A1A]/95 hover:bg-zinc-50 dark:hover:bg-[#252525] text-zinc-700 dark:text-[#E0E0E0] cursor-pointer text-[11px] sm:text-xs font-mono font-bold transition-all hover:scale-105 active:scale-95 shadow-sm"
-                title="Connect your Google Account to sync timesheets directly to Google Sheets"
+                title="Open Google Sheets Cloud Sync Panel"
               >
                 <Database className="w-3.5 h-3.5 text-blue-500 animate-pulse" />
                 <span className="hidden sm:inline">Sync Google Sheets</span>
@@ -521,6 +846,8 @@ export default function App() {
           >
             {isDarkMode ? <Sun className="w-4 h-4 text-amber-500" /> : <Moon className="w-4 h-4 text-zinc-600" />}
           </button>
+
+
         </div>
       </div>
 
@@ -539,7 +866,7 @@ export default function App() {
           {/* App description and header info - now with MORE SPACE for title */}
           <div className="space-y-1.5 pt-4">
             <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight text-zinc-950 dark:text-white font-mono">
-              Timesheet Recorder
+              Timesheet Recorder V4.83
             </h1>
             <p className="text-xs sm:text-sm text-zinc-500 dark:text-zinc-400 leading-relaxed font-mono max-w-2xl">
               Your high-precision logs companion
@@ -617,27 +944,26 @@ export default function App() {
 
           {activeTab === 'timesheet' && (
             <div className="space-y-6">
-              {/* Two Column Layout on Desktop */}
-              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-                <div className="lg:col-span-5 space-y-4 print:hidden">
-                  <TimesheetForm
-                    projects={projects}
-                    onAddEntry={handleAddEntry}
-                    selectedDate={selectedDate}
-                    setSelectedDate={setSelectedDate}
-                  />
-                </div>
-                
-                <div className="lg:col-span-7">
-                  <TimesheetList
-                    entries={entries}
-                    projects={projects}
-                    onDeleteEntry={handleDeleteEntry}
-                    onEditEntry={handleEditEntry}
-                    selectedDate={selectedDate}
-                    setSelectedDate={setSelectedDate}
-                  />
-                </div>
+              {/* Full Width Log Effort Ledger first */}
+              <div className="print:hidden">
+                <TimesheetForm
+                  projects={projects}
+                  onAddEntry={handleAddEntry}
+                  selectedDate={selectedDate}
+                  setSelectedDate={setSelectedDate}
+                />
+              </div>
+              
+              {/* Timesheet list below */}
+              <div>
+                <TimesheetList
+                  entries={entries}
+                  projects={projects}
+                  onDeleteEntry={handleDeleteEntry}
+                  onEditEntry={handleEditEntry}
+                  selectedDate={selectedDate}
+                  setSelectedDate={setSelectedDate}
+                />
               </div>
             </div>
           )}
@@ -650,6 +976,10 @@ export default function App() {
                 onAddProject={handleAddProject}
                 onEditProject={handleEditProject}
                 onDeleteProject={handleDeleteProject}
+                agencies={agencies}
+                onAddAgency={handleAddAgency}
+                onEditAgency={handleEditAgency}
+                onDeleteAgency={handleDeleteAgency}
               />
             </div>
           )}
@@ -674,7 +1004,7 @@ export default function App() {
         {/* Corporate footer */}
         <footer className="mt-16 pt-6 border-t border-zinc-200 dark:border-[#2F2F2F] text-center space-y-2 print:hidden">
           <p className="text-[10px] font-mono text-zinc-400 dark:text-zinc-500 uppercase tracking-widest">
-            Timesheet Ledger Protocol v4.81 • Client-Side Cookies Approved
+            Timesheet Ledger Protocol v4.83 • Client-Side Cookies Approved
           </p>
           <p className="text-xs text-zinc-400 dark:text-zinc-500 max-w-lg mx-auto leading-normal italic">
             "Disclaimer: Logging hours does not guarantee promotion. Any similarity between recorded tasks and actual productive output is strictly coincidental. Powered by caffeine, temporary variables, and corporate anxiety."
@@ -885,111 +1215,255 @@ export default function App() {
 
                 {/* Account Details & Status */}
                 <div className="space-y-4 text-xs">
-                  {googleUser && (
-                    <div className="p-3.5 bg-zinc-50 dark:bg-[#222] border border-zinc-200 dark:border-[#2D2D2D] rounded-xl space-y-2.5">
-                      <div className="flex items-center justify-between">
-                        <span className="text-zinc-500 dark:text-zinc-400 font-mono font-bold uppercase text-[9px] tracking-wide">
-                          Connected Account
-                        </span>
-                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/15">
-                          Active
-                        </span>
-                      </div>
-                      <div className="flex items-center space-x-3">
-                        {googleUser.photoURL ? (
-                          <img
-                            src={googleUser.photoURL}
-                            alt={googleUser.displayName || "Google User"}
-                            className="w-9 h-9 rounded-full border border-zinc-200 dark:border-[#2F2F2F] shadow-sm"
-                            referrerPolicy="no-referrer"
+                  {!googleUser ? (
+                    <div className="space-y-4">
+                      {/* Step 1: Link Shared Spreadsheet */}
+                      <div className="p-4 bg-zinc-50 dark:bg-[#1E1E1E] border border-zinc-200 dark:border-[#2D2D2D] rounded-xl space-y-3">
+                        <div className="flex items-center space-x-2">
+                          <span className="flex items-center justify-center w-5 h-5 rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 font-mono font-bold text-[10px]">
+                            1
+                          </span>
+                          <h4 className="font-bold text-zinc-800 dark:text-zinc-200 uppercase tracking-wide text-[10px] font-mono">
+                            Link Team Spreadsheet (Optional)
+                          </h4>
+                        </div>
+                        
+                        <p className="text-[11px] text-zinc-500 dark:text-zinc-400 leading-relaxed font-mono">
+                          If your Team Lead shared a Google Sheet with you, paste its URL or ID below so your timesheets sync directly into it. Otherwise, we will automatically create one in your Drive.
+                        </p>
+
+                        <form onSubmit={handleConnectCustomSheet} className="flex gap-1.5">
+                          <input
+                            type="text"
+                            value={customSheetInput}
+                            onChange={(e) => setCustomSheetInput(e.target.value)}
+                            placeholder="Paste shared Google Sheet URL or ID"
+                            className="flex-1 bg-white dark:bg-[#151515] border border-zinc-200 dark:border-[#2D2D2D] rounded-lg px-2.5 py-1.5 text-xs text-zinc-800 dark:text-zinc-200 focus:outline-none focus:ring-1 focus:ring-blue-500 font-mono"
                           />
-                        ) : (
-                          <div className="w-9 h-9 rounded-full bg-zinc-200 dark:bg-zinc-800 flex items-center justify-center font-bold text-zinc-600 dark:text-zinc-300">
-                            {googleUser.displayName?.charAt(0) || "G"}
+                          <button
+                            type="submit"
+                            className="px-3 py-1.5 bg-zinc-900 hover:bg-zinc-850 dark:bg-zinc-100 dark:hover:bg-white text-white dark:text-zinc-900 font-mono font-bold text-[11px] rounded-lg transition-all cursor-pointer shrink-0"
+                          >
+                            Link
+                          </button>
+                        </form>
+                        
+                        {customSheetError && (
+                          <p className="text-[10px] text-rose-500 font-mono leading-tight">{customSheetError}</p>
+                        )}
+
+                        {spreadsheetId && (
+                          <div className="flex items-center space-x-2 text-[11px] text-emerald-600 dark:text-emerald-400 bg-emerald-500/5 border border-emerald-500/10 rounded-lg p-2 font-mono">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                            <span className="font-bold">Linked:</span>
+                            <span className="truncate max-w-[170px]">{spreadsheetId}</span>
                           </div>
                         )}
-                        <div>
-                          <p className="font-bold text-zinc-800 dark:text-zinc-200">
-                            {googleUser.displayName || "Google Workspace User"}
+                      </div>
+
+                      {/* Step 2: Sign In / Authorize */}
+                      <div className="p-4 bg-zinc-50 dark:bg-[#1E1E1E] border border-zinc-200 dark:border-[#2D2D2D] rounded-xl space-y-3">
+                        <div className="flex items-center space-x-2">
+                          <span className="flex items-center justify-center w-5 h-5 rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 font-mono font-bold text-[10px]">
+                            2
+                          </span>
+                          <h4 className="font-bold text-zinc-800 dark:text-zinc-200 uppercase tracking-wide text-[10px] font-mono">
+                            Authorize with Google Account
+                          </h4>
+                        </div>
+
+                        <p className="text-[11px] text-zinc-500 dark:text-zinc-400 leading-relaxed font-mono">
+                          Connect your Google Account to grant write access to sheets and enable real-time backup.
+                        </p>
+
+                        <div className="space-y-2.5">
+                          <button
+                            onClick={() => handleGoogleLogin(false)}
+                            className="w-full py-2.5 px-3 bg-blue-600 hover:bg-blue-500 text-white font-mono font-bold text-xs rounded-xl transition-all flex items-center justify-center space-x-2 cursor-pointer shadow-md active:scale-95"
+                          >
+                            <Database className="w-4 h-4 text-white animate-pulse" />
+                            <span>Connect Google Account</span>
+                          </button>
+
+                          <div className="pt-1.5 text-center">
+                            <button
+                              type="button"
+                              onClick={() => handleGoogleLogin(true)}
+                              className="text-[10.5px] text-zinc-500 dark:text-zinc-400 hover:text-blue-600 dark:hover:text-blue-400 underline decoration-dashed font-mono cursor-pointer"
+                              title="If popup closes too quickly or is blocked, use redirect login method."
+                            >
+                              💡 Popup blocked or closes instantly? Try Redirect Login
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      <div className="p-3.5 bg-zinc-50 dark:bg-[#222] border border-zinc-200 dark:border-[#2D2D2D] rounded-xl space-y-2.5">
+                        <div className="flex items-center justify-between">
+                          <span className="text-zinc-500 dark:text-zinc-400 font-mono font-bold uppercase text-[9px] tracking-wide">
+                            Connected Account
+                          </span>
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/15">
+                            Active
+                          </span>
+                        </div>
+                        <div className="flex items-center space-x-3">
+                          {googleUser.photoURL ? (
+                            <img
+                              src={googleUser.photoURL}
+                              alt={googleUser.displayName || "Google User"}
+                              className="w-9 h-9 rounded-full border border-zinc-200 dark:border-[#2F2F2F] shadow-sm"
+                              referrerPolicy="no-referrer"
+                            />
+                          ) : (
+                            <div className="w-9 h-9 rounded-full bg-zinc-200 dark:bg-zinc-800 flex items-center justify-center font-bold text-zinc-600 dark:text-zinc-300">
+                              {googleUser.displayName?.charAt(0) || "G"}
+                            </div>
+                          )}
+                          <div>
+                            <p className="font-bold text-zinc-800 dark:text-zinc-200">
+                              {googleUser.displayName || "Google Workspace User"}
+                            </p>
+                            <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                              {googleUser.email}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Sync Engine Status */}
+                      <div className="p-3.5 bg-zinc-50 dark:bg-[#222] border border-zinc-200 dark:border-[#2D2D2D] rounded-xl space-y-2.5">
+                        <div className="flex items-center justify-between">
+                          <span className="text-zinc-500 dark:text-zinc-400 font-mono font-bold uppercase text-[9px] tracking-wide block">
+                            Sync Engine Status
+                          </span>
+                          <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-bold ${
+                            syncingState === 'syncing' ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/15' :
+                            syncingState === 'error' ? 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/15 animate-pulse' :
+                            syncingState === 'synced' ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/15' :
+                            'bg-zinc-500/10 text-zinc-600 dark:text-zinc-400 border border-zinc-500/15'
+                          }`}>
+                            {syncingState === 'syncing' ? 'Syncing...' :
+                             syncingState === 'error' ? 'Sync Error' :
+                             syncingState === 'synced' ? 'Synced' : 'Idle'}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between font-mono text-[11px]">
+                          <span className="text-zinc-500 dark:text-zinc-400">
+                            Last successful sync:
+                          </span>
+                          <span className="font-bold text-zinc-700 dark:text-zinc-300">
+                            {lastSyncedTime ? lastSyncedTime : 'Never'}
+                          </span>
+                        </div>
+
+                        {/* Informative Warning on Error */}
+                        {syncingState === 'error' && (
+                          <div className="p-2.5 bg-rose-500/5 border border-rose-500/20 rounded-lg space-y-1">
+                            <p className="text-[10px] text-rose-600 dark:text-rose-400 leading-normal font-mono font-bold flex items-center gap-1">
+                              <AlertOctagon className="w-3 h-3 shrink-0" />
+                              <span>Sync credentials expired or network offline.</span>
+                            </p>
+                            <p className="text-[9.5px] text-zinc-500 dark:text-zinc-400 leading-normal font-mono">
+                              Click <strong className="text-blue-600 dark:text-blue-400">Reconnect</strong> to authenticate again, or <strong className="text-emerald-600 dark:text-emerald-400">Sync Now</strong> to retry.
+                            </p>
+                          </div>
+                        )}
+
+                        {/* Safe Collaboration Actions */}
+                        <div className="flex gap-2 pt-1 border-t border-zinc-200/40 dark:border-zinc-800/40">
+                          <button
+                            onClick={safeSyncRefresh}
+                            disabled={syncingState === 'syncing'}
+                            className="flex-1 py-1.5 px-2.5 bg-white dark:bg-[#1A1A1A] hover:bg-zinc-100 dark:hover:bg-[#2A2A2A] text-zinc-700 dark:text-zinc-300 border border-zinc-200 dark:border-[#2D2D2D] rounded-lg font-mono font-bold text-[10px] flex items-center justify-center space-x-1 transition-all hover:border-emerald-500/40 active:scale-95 cursor-pointer disabled:opacity-50"
+                            title="Fetch other teammates' logs and force refresh"
+                          >
+                            <RefreshCw className={`w-3 h-3 ${syncingState === 'syncing' ? 'animate-spin text-amber-500' : 'text-emerald-500'}`} />
+                            <span>Sync Now</span>
+                          </button>
+                          
+                          <button
+                            onClick={() => handleGoogleLogin(false)}
+                            disabled={syncingState === 'syncing'}
+                            className="flex-1 py-1.5 px-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-mono font-bold text-[10px] flex items-center justify-center space-x-1 transition-all active:scale-95 cursor-pointer disabled:opacity-50"
+                            title="Reconnect to Google Account and refresh API credentials"
+                          >
+                            <Database className="w-3 h-3 text-white" />
+                            <span>Reconnect</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Active Spreadsheet details */}
+                      <div className="p-3.5 bg-zinc-50 dark:bg-[#222] border border-zinc-200 dark:border-[#2D2D2D] rounded-xl space-y-2.5">
+                        <span className="text-zinc-500 dark:text-zinc-400 font-mono font-bold uppercase text-[9px] tracking-wide block">
+                          Target Spreadsheet Database
+                        </span>
+                        <div className="flex items-center justify-between">
+                          <div className="space-y-0.5">
+                            <p className="font-bold text-zinc-800 dark:text-zinc-200">
+                              {spreadsheetId ? 'Custom linked spreadsheet' : 'Timesheet Recorder Database'}
+                            </p>
+                            <p className="text-[11px] text-zinc-500 dark:text-zinc-400 font-mono truncate max-w-[210px]">
+                              {spreadsheetId ? `ID: ${spreadsheetId.substring(0, 16)}...` : 'Files reside in Google Drive'}
+                            </p>
+                          </div>
+                          {sheetsUrl && (
+                            <a
+                              href={sheetsUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="flex items-center space-x-1 px-2.5 py-1.5 bg-emerald-600 dark:bg-emerald-700 hover:bg-emerald-700 dark:hover:bg-emerald-600 text-white text-[11px] font-mono font-bold rounded-lg transition-all shadow-xs cursor-pointer shrink-0"
+                            >
+                              <span>Open Sheet</span>
+                              <ExternalLink className="w-3 h-3" />
+                            </a>
+                          )}
+                        </div>
+
+                        <div className="pt-2.5 border-t border-zinc-200/50 dark:border-[#2D2D2D]/50 space-y-2">
+                          <p className="text-[10px] font-mono font-bold text-zinc-400 dark:text-zinc-500 uppercase">
+                            Switch/Override Spreadsheet URL / ID
                           </p>
-                          <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
-                            {googleUser.email}
-                          </p>
+                          <form onSubmit={handleConnectCustomSheet} className="flex gap-1.5">
+                            <input
+                              type="text"
+                              value={customSheetInput}
+                              onChange={(e) => setCustomSheetInput(e.target.value)}
+                              placeholder="Paste different Google Sheet URL or ID"
+                              className="flex-1 bg-white dark:bg-[#1A1A1A] border border-zinc-200 dark:border-[#2D2D2D] rounded-lg px-2.5 py-1.5 text-xs text-zinc-800 dark:text-zinc-200 focus:outline-none focus:ring-1 focus:ring-blue-500 font-mono"
+                            />
+                            <button
+                              type="submit"
+                              className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white font-mono font-bold text-[11px] rounded-lg transition-colors cursor-pointer shrink-0"
+                            >
+                              Link
+                            </button>
+                          </form>
+                          {customSheetError && (
+                            <p className="text-[10px] text-rose-500 font-mono leading-tight">{customSheetError}</p>
+                          )}
                         </div>
                       </div>
                     </div>
                   )}
-
-                  {/* Active Spreadsheet details */}
-                  <div className="p-3.5 bg-zinc-50 dark:bg-[#222] border border-zinc-200 dark:border-[#2D2D2D] rounded-xl space-y-2.5">
-                    <span className="text-zinc-500 dark:text-zinc-400 font-mono font-bold uppercase text-[9px] tracking-wide block">
-                      Target Spreadsheet Database
-                    </span>
-                    <div className="flex items-center justify-between">
-                      <div className="space-y-0.5">
-                        <p className="font-bold text-zinc-800 dark:text-zinc-200">
-                          Timesheet Recorder Database
-                        </p>
-                        <p className="text-[11px] text-zinc-500 dark:text-zinc-400 font-mono">
-                          Files reside in Google Drive
-                        </p>
-                      </div>
-                      {sheetsUrl && (
-                        <a
-                          href={sheetsUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="flex items-center space-x-1 px-2.5 py-1.5 bg-emerald-600 dark:bg-emerald-700 hover:bg-emerald-700 dark:hover:bg-emerald-600 text-white text-[11px] font-mono font-bold rounded-lg transition-all shadow-xs cursor-pointer"
-                        >
-                          <span>Open Sheet</span>
-                          <ExternalLink className="w-3 h-3" />
-                        </a>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Operational Controls Info */}
-                  <div className="space-y-2">
-                    <h4 className="font-bold font-mono text-[11px] uppercase tracking-wider text-zinc-800 dark:text-zinc-200">
-                      Sync Utilities & Recovery
-                    </h4>
-                    <p className="text-[11px] text-zinc-500 dark:text-zinc-400 leading-normal">
-                      By default, all additions, edits, and deletions will synchronize automatically within 1.5 seconds of client changes. Use manual tools below to override or restore data.
-                    </p>
-
-                    <div className="grid grid-cols-2 gap-2 pt-1.5">
-                      <button
-                        onClick={forceBackupToSheets}
-                        className="flex flex-col items-center justify-center p-2.5 bg-white dark:bg-[#1A1A1A] hover:bg-zinc-50 dark:hover:bg-[#252525] border border-zinc-200 dark:border-[#2F2F2F] rounded-xl cursor-pointer text-center group transition-all"
-                        title="Force upload all local data"
-                      >
-                        <Database className="w-4 h-4 text-blue-500 mb-1 group-hover:scale-110 transition-transform" />
-                        <span className="font-bold text-[10.5px] text-zinc-800 dark:text-zinc-200">Force Backup</span>
-                        <span className="text-[9px] text-zinc-500 dark:text-zinc-400 leading-none mt-0.5">Local → Sheets</span>
-                      </button>
-
-                      <button
-                        onClick={forceRestoreFromSheets}
-                        className="flex flex-col items-center justify-center p-2.5 bg-white dark:bg-[#1A1A1A] hover:bg-zinc-50 dark:hover:bg-[#252525] border border-zinc-200 dark:border-[#2F2F2F] rounded-xl cursor-pointer text-center group transition-all"
-                        title="Force download from Sheets database"
-                      >
-                        <RefreshCw className="w-4 h-4 text-emerald-500 mb-1 group-hover:rotate-180 transition-transform duration-500" />
-                        <span className="font-bold text-[10.5px] text-zinc-800 dark:text-zinc-200">Force Restore</span>
-                        <span className="text-[9px] text-zinc-500 dark:text-zinc-400 leading-none mt-0.5">Sheets → Local</span>
-                      </button>
-                    </div>
-                  </div>
                 </div>
 
                 {/* Footer and Sign Out */}
                 <div className="flex items-center justify-between border-t border-zinc-150 dark:border-[#2D2D2D] pt-3 pb-1 text-xs">
-                  <button
-                    onClick={handleGoogleLogout}
-                    className="flex items-center space-x-1 text-rose-600 dark:text-rose-400 hover:text-rose-700 dark:hover:text-rose-300 font-bold font-mono transition-colors cursor-pointer"
-                  >
-                    <LogOut className="w-3.5 h-3.5" />
-                    <span>Disconnect Google</span>
-                  </button>
+                  {googleUser ? (
+                    <button
+                      onClick={handleGoogleLogout}
+                      className="flex items-center space-x-1 text-rose-600 dark:text-rose-400 hover:text-rose-700 dark:hover:text-rose-300 font-bold font-mono transition-colors cursor-pointer"
+                    >
+                      <LogOut className="w-3.5 h-3.5" />
+                      <span>Disconnect Google</span>
+                    </button>
+                  ) : (
+                    <div />
+                  )}
 
                   <button
                     onClick={() => setShowSyncPanel(false)}

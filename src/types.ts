@@ -13,10 +13,23 @@ export interface Project {
   agencyName?: string;
   brandName?: string;
   rate?: number; // Hourly rate
+  dayRate?: number; // Day rate
+  hoursInDay?: number; // Hours in a day (e.g. 7.5, 8)
   isNonBillable?: boolean;
   createdAt: string;
   budget_hours?: number | null; // Nullable float
   alert_thresholds?: number[]; // Array of percentages
+  createdBy?: string; // Name of creator
+}
+
+export interface Agency {
+  id: string;
+  name: string;
+  address: string;
+  url: string;
+  contactEmail: string;
+  financeEmail: string;
+  createdAt: string;
 }
 
 export interface Tag {
@@ -34,6 +47,9 @@ export interface TimeEntry {
   coffees: number;
   createdAt: string;
   tagIds?: string[]; // References Tag.id
+  loggedByName?: string;
+  loggedByEmail?: string;
+  projectName?: string;
 }
 
 export interface BudgetAlert {

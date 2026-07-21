@@ -3,13 +3,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Project, TimeEntry, Tag, BudgetAlert } from '../types';
+import { Project, TimeEntry, Tag, BudgetAlert, Agency } from '../types';
 
 const PROJECTS_KEY = 'timesheet_recorder_projects_fresh_v2';
 const ENTRIES_KEY = 'timesheet_recorder_entries_fresh_v2';
 const DARK_MODE_KEY = 'timesheet_recorder_dark_mode';
 const TAGS_KEY = 'timesheet_recorder_tags_fresh_v2';
 const ALERTS_KEY = 'timesheet_recorder_alerts_fresh_v2';
+const AGENCIES_KEY = 'timesheet_recorder_agencies_v1';
 
 const INITIAL_PROJECTS: Project[] = [];
 const INITIAL_ENTRIES: TimeEntry[] = [];
@@ -21,6 +22,7 @@ const INITIAL_TAGS: Tag[] = [
   { id: 'tag-5', name: 'Research', colorCode: 'bg-pink-500/15 text-pink-600 border-pink-500/30' }
 ];
 const INITIAL_ALERTS: BudgetAlert[] = [];
+const INITIAL_AGENCIES: Agency[] = [];
 
 export function getProjects(): Project[] {
   const data = localStorage.getItem(PROJECTS_KEY);
@@ -81,5 +83,26 @@ export function getAlerts(): BudgetAlert[] {
 
 export function saveAlerts(alerts: BudgetAlert[]): void {
   localStorage.setItem(ALERTS_KEY, JSON.stringify(alerts));
+}
+
+export function getAgencies(): Agency[] {
+  const data = localStorage.getItem(AGENCIES_KEY);
+  if (!data) {
+    saveAgencies(INITIAL_AGENCIES);
+    return INITIAL_AGENCIES;
+  }
+  const parsed = JSON.parse(data) as Agency[];
+  const filtered = parsed.filter(
+    (a) => a.name !== 'Aether Digital' && a.name !== 'Vanguard Creative'
+  );
+  if (filtered.length !== parsed.length) {
+    saveAgencies(filtered);
+    return filtered;
+  }
+  return parsed;
+}
+
+export function saveAgencies(agencies: Agency[]): void {
+  localStorage.setItem(AGENCIES_KEY, JSON.stringify(agencies));
 }
 

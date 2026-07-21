@@ -4,7 +4,15 @@
  */
 
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, User } from 'firebase/auth';
+import {
+  getAuth,
+  signInWithPopup,
+  signInWithRedirect,
+  getRedirectResult,
+  GoogleAuthProvider,
+  onAuthStateChanged,
+  User
+} from 'firebase/auth';
 import firebaseConfig from '../../firebase-applet-config.json';
 import { Project, TimeEntry } from '../types';
 
@@ -24,32 +32,76 @@ export const initAuth = (
   onAuthSuccess?: (user: User, token: string) => void,
   onAuthFailure?: () => void
 ) => {
-  return onAuthStateChanged(auth, async (user: User | null) => {
-    if (user) {
-      if (cachedAccessToken) {
-        if (onAuthSuccess) onAuthSuccess(user, cachedAccessToken);
-      } else if (!isSigningIn) {
-        cachedAccessToken = null;
-        if (onAuthFailure) onAuthFailure();
+  let unsubscribe: (() => void) | null = null;
+
+  // Retrieve cached token if exists
+  const savedToken = localStorage.getItem('timesheet_recorder_google_access_token');
+  if (savedToken) {
+    cachedAccessToken = savedToken;
+  }
+
+  // Check for redirect result first (useful in standard tabs or PWA mode)
+  getRedirectResult(auth)
+    .then((result) => {
+      if (result) {
+        const credential = GoogleAuthProvider.credentialFromResult(result);
+        if (credential?.accessToken) {
+          cachedAccessToken = credential.accessToken;
+          localStorage.setItem('timesheet_recorder_google_access_token', credential.accessToken);
+          if (result.user && onAuthSuccess) {
+            onAuthSuccess(result.user, credential.accessToken);
+          }
+        }
       }
-    } else {
-      cachedAccessToken = null;
-      if (onAuthFailure) onAuthFailure();
+    })
+    .catch((error) => {
+      console.error('Error handling redirect result:', error);
+    })
+    .finally(() => {
+      // Set up onAuthStateChanged observer after redirect check completes
+      unsubscribe = onAuthStateChanged(auth, async (user: User | null) => {
+        if (user) {
+          // If we have a user but no access token, check local storage again
+          const token = cachedAccessToken || localStorage.getItem('timesheet_recorder_google_access_token');
+          if (token) {
+            cachedAccessToken = token;
+            if (onAuthSuccess) onAuthSuccess(user, token);
+          } else if (!isSigningIn) {
+            cachedAccessToken = null;
+            if (onAuthFailure) onAuthFailure();
+          }
+        } else {
+          cachedAccessToken = null;
+          localStorage.removeItem('timesheet_recorder_google_access_token');
+          if (onAuthFailure) onAuthFailure();
+        }
+      });
+    });
+
+  return () => {
+    if (unsubscribe) {
+      unsubscribe();
     }
-  });
+  };
 };
 
-export const googleSignIn = async (): Promise<{ user: User; accessToken: string } | null> => {
+export const googleSignIn = async (useRedirect = false): Promise<{ user: User; accessToken: string } | null> => {
   try {
     isSigningIn = true;
-    const result = await signInWithPopup(auth, provider);
-    const credential = GoogleAuthProvider.credentialFromResult(result);
-    if (!credential?.accessToken) {
-      throw new Error('Failed to get access token from Firebase Auth');
+    
+    if (useRedirect) {
+      await signInWithRedirect(auth, provider);
+      return null;
     }
 
-    cachedAccessToken = credential.accessToken;
-    return { user: result.user, accessToken: cachedAccessToken };
+    const result = await signInWithPopup(auth, provider);
+    const credential = GoogleAuthProvider.credentialFromResult(result);
+    if (credential?.accessToken) {
+      cachedAccessToken = credential.accessToken;
+      localStorage.setItem('timesheet_recorder_google_access_token', credential.accessToken);
+      return { user: result.user, accessToken: cachedAccessToken };
+    }
+    return null;
   } catch (error: any) {
     console.error('Sign in error:', error);
     throw error;
@@ -59,12 +111,13 @@ export const googleSignIn = async (): Promise<{ user: User; accessToken: string 
 };
 
 export const getAccessToken = async (): Promise<string | null> => {
-  return cachedAccessToken;
+  return cachedAccessToken || localStorage.getItem('timesheet_recorder_google_access_token');
 };
 
 export const logout = async () => {
   await auth.signOut();
   cachedAccessToken = null;
+  localStorage.removeItem('timesheet_recorder_google_access_token');
 };
 
 // Spreadsheet API interactions
@@ -142,12 +195,12 @@ export async function writeHeaders(accessToken: string, spreadsheetId: string): 
       valueInputOption: 'USER_ENTERED',
       data: [
         {
-          range: 'Projects!A1:K1',
-          values: [['ID', 'Name', 'Agency Name', 'Brand Name', 'Rate ($)', 'Estimated Hours', 'Budget Hours', 'Start Date', 'End Date', 'Is Non-Billable', 'Created At']]
+          range: 'Projects!A1:L1',
+          values: [['ID', 'Name', 'Agency Name', 'Brand Name', 'Rate ($)', 'Estimated Hours', 'Budget Hours', 'Start Date', 'End Date', 'Is Non-Billable', 'Created By', 'Created At']]
         },
         {
-          range: 'Timesheet Entries!A1:H1',
-          values: [['ID', 'Project ID', 'Date', 'Hours', 'Comment', 'Coffees Logged', 'Tag IDs', 'Created At']]
+          range: 'Timesheet Entries!A1:K1',
+          values: [['ID', 'Project ID', 'Project Name', 'Date', 'Hours', 'Comment', 'Coffees Logged', 'Tag IDs', 'Logged By Name', 'Logged By Email', 'Created At']]
         }
       ]
     })
@@ -173,7 +226,7 @@ export async function syncDataToSheet(
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      ranges: ['Projects!A2:K10000', 'Timesheet Entries!A2:H10000']
+      ranges: ['Projects!A2:L10000', 'Timesheet Entries!A2:K10000']
     })
   });
   if (!clearRes.ok) {
@@ -195,41 +248,48 @@ export async function syncDataToSheet(
     p.startDate || "",
     p.endDate || "",
     p.isNonBillable ? "TRUE" : "FALSE",
+    p.createdBy || "",
     p.createdAt || ""
   ]);
 
-  const entryRows = entries.map(e => [
-    e.id,
-    e.projectId,
-    e.date,
-    e.hours,
-    e.comment || "",
-    e.coffees !== undefined && e.coffees !== null ? e.coffees : 0,
-    e.tagIds ? e.tagIds.join(",") : "",
-    e.createdAt || ""
-  ]);
+  const entryRows = entries.map(e => {
+    const projName = e.projectName || projects.find(p => p.id === e.projectId)?.name || "";
+    return [
+      e.id,
+      e.projectId,
+      projName,
+      e.date,
+      e.hours,
+      e.comment || "",
+      e.coffees !== undefined && e.coffees !== null ? e.coffees : 0,
+      e.tagIds ? e.tagIds.join(",") : "",
+      e.loggedByName || "",
+      e.loggedByEmail || "",
+      e.createdAt || ""
+    ];
+  });
 
   const data: any[] = [];
   if (projectRows.length > 0) {
     data.push({
-      range: `Projects!A2:K${projectRows.length + 1}`,
+      range: `Projects!A2:L${projectRows.length + 1}`,
       values: projectRows
     });
   } else {
     data.push({
-      range: `Projects!A2:K2`,
-      values: [["", "", "", "", "", "", "", "", "", "", ""]]
+      range: `Projects!A2:L2`,
+      values: [["", "", "", "", "", "", "", "", "", "", "", ""]]
     });
   }
   if (entryRows.length > 0) {
     data.push({
-      range: `Timesheet Entries!A2:H${entryRows.length + 1}`,
+      range: `Timesheet Entries!A2:K${entryRows.length + 1}`,
       values: entryRows
     });
   } else {
     data.push({
-      range: `Timesheet Entries!A2:H2`,
-      values: [["", "", "", "", "", "", "", ""]]
+      range: `Timesheet Entries!A2:K2`,
+      values: [["", "", "", "", "", "", "", "", "", "", ""]]
     });
   }
 
@@ -255,7 +315,7 @@ export async function loadDataFromSheet(
   accessToken: string,
   spreadsheetId: string
 ): Promise<{ projects: Project[]; entries: TimeEntry[] }> {
-  const url = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values:batchGet?ranges=Projects!A2:K10000&ranges=Timesheet%20Entries!A2:H10000`;
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values:batchGet?ranges=Projects!A2:L10000&ranges=Timesheet%20Entries!A2:K10000`;
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
@@ -282,7 +342,8 @@ export async function loadDataFromSheet(
       startDate: row[7] || "",
       endDate: row[8] || "",
       isNonBillable: row[9] === "TRUE",
-      createdAt: row[10] || new Date().toISOString(),
+      createdBy: row[10] || "",
+      createdAt: row[11] || new Date().toISOString(),
     };
   }).filter((p: any): p is Project => p !== null);
 
@@ -291,12 +352,15 @@ export async function loadDataFromSheet(
     return {
       id: row[0],
       projectId: row[1] || "",
-      date: row[2] || "",
-      hours: row[3] !== undefined && row[3] !== "" ? Number(row[3]) : 0,
-      comment: row[4] || "",
-      coffees: row[5] !== undefined && row[5] !== "" ? Number(row[5]) : 0,
-      tagIds: row[6] ? row[6].split(",").filter(Boolean) : [],
-      createdAt: row[7] || new Date().toISOString(),
+      projectName: row[2] || "",
+      date: row[3] || "",
+      hours: row[4] !== undefined && row[4] !== "" ? Number(row[4]) : 0,
+      comment: row[5] || "",
+      coffees: row[6] !== undefined && row[6] !== "" ? Number(row[6]) : 0,
+      tagIds: row[7] ? row[7].split(",").filter(Boolean) : [],
+      loggedByName: row[8] || "",
+      loggedByEmail: row[9] || "",
+      createdAt: row[10] || new Date().toISOString(),
     };
   }).filter((e: any): e is TimeEntry => e !== null);
 
