@@ -137,6 +137,7 @@ export default function App() {
     });
     setLastSyncedTime(now);
     localStorage.setItem('timesheet_recorder_last_synced_time', now);
+    localStorage.setItem('timesheet_recorder_last_synced_iso', new Date().toISOString());
   };
 
   const handleConnectCustomSheet = async (e: React.FormEvent) => {
@@ -165,10 +166,10 @@ export default function App() {
       if (token) {
         setSyncingState('syncing');
         await writeHeaders(token, id);
-        await syncDataToSheet(token, id, projects, entries);
+        await syncDataToSheet(token, id, projects, entries, agencies);
         setSyncingState('synced');
         updateLastSyncedTime();
-        alert("Successfully linked custom spreadsheet! Existing projects and entries synced.");
+        alert("Successfully linked custom spreadsheet! Existing projects, entries, and agencies synced.");
       } else {
         alert("Spreadsheet ID override set successfully! Connecting a Google account will now synchronize directly to this sheet.");
       }
@@ -195,24 +196,69 @@ export default function App() {
         setSpreadsheetId(sheetId);
         setSheetsUrl(`https://docs.google.com/spreadsheets/d/${sheetId}`);
 
-        // If local is completely blank, recover from spreadsheet
+        // Fetch latest data from the sheet (source of truth)
+        const loaded = await loadDataFromSheet(token, sheetId);
+
         const localProjects = getProjects();
         const localEntries = getEntries();
-        if (localProjects.length === 0 && localEntries.length === 0) {
-          const loaded = await loadDataFromSheet(token, sheetId);
-          if (loaded.projects.length > 0 || loaded.entries.length > 0) {
-            setProjects(loaded.projects);
-            saveProjects(loaded.projects);
-            setEntries(loaded.entries);
-            saveEntries(loaded.entries);
-            setSyncingState('synced');
-            updateLastSyncedTime();
-            return;
-          }
-        }
+        const localAgencies = getAgencies();
 
-        // Otherwise sync what we have up to sheets
-        await syncDataToSheet(token, sheetId, localProjects, localEntries);
+        // Get the last known sync timestamp from local storage (if any)
+        const lastSyncIso = localStorage.getItem('timesheet_recorder_last_synced_iso');
+
+        // Merge projects:
+        // Start with the sheet's current projects as the base, preserving local scope/rate fields if sheet is missing them
+        const mergedProjects = loaded.projects.map(sp => {
+          const lp = localProjects.find(p => p.id === sp.id);
+          if (!lp) return sp;
+          return {
+            ...sp,
+            description: sp.description || lp.description,
+            dayRate: sp.dayRate ?? lp.dayRate,
+            hoursInDay: sp.hoursInDay ?? lp.hoursInDay
+          };
+        });
+        
+        // Find local projects not present on the sheet and retain them
+        localProjects.forEach(localProj => {
+          const existsOnSheet = loaded.projects.some(p => p.id === localProj.id);
+          if (!existsOnSheet) {
+            mergedProjects.push(localProj);
+          }
+        });
+
+        // Merge entries:
+        // Start with the sheet's current entries as the base
+        const mergedEntries = [...loaded.entries];
+
+        // Find local entries not present on the sheet and retain them
+        localEntries.forEach(localEntry => {
+          const existsOnSheet = loaded.entries.some(e => e.id === localEntry.id);
+          if (!existsOnSheet) {
+            mergedEntries.push(localEntry);
+          }
+        });
+
+        // Merge agencies:
+        const mergedAgencies = [...loaded.agencies];
+        localAgencies.forEach(localAgency => {
+          const existsOnSheet = loaded.agencies.some(a => a.id === localAgency.id);
+          if (!existsOnSheet) {
+            mergedAgencies.push(localAgency);
+          }
+        });
+
+        // Sync the unified merged datasets back to the Google Sheet
+        await syncDataToSheet(token, sheetId, mergedProjects, mergedEntries, mergedAgencies);
+
+        // Update local state and storage
+        setProjects(mergedProjects);
+        saveProjects(mergedProjects);
+        setEntries(mergedEntries);
+        saveEntries(mergedEntries);
+        setAgencies(mergedAgencies);
+        saveAgencies(mergedAgencies);
+
         setSyncingState('synced');
         updateLastSyncedTime();
       } else {
@@ -259,7 +305,7 @@ export default function App() {
     }
   };
 
-  const triggerSheetSync = async (projList?: Project[], entList?: Project[]) => {
+  const triggerSheetSync = async (projList?: Project[], entList?: TimeEntry[], agList?: Agency[]) => {
     const token = accessToken || await getAccessToken();
     const sheetId = spreadsheetId || localStorage.getItem('timesheet_recorder_spreadsheet_id');
     if (!token || !sheetId) return;
@@ -268,7 +314,8 @@ export default function App() {
     try {
       const projs = projList || projects;
       const ents = entList || entries;
-      await syncDataToSheet(token, sheetId, projs, ents);
+      const ags = agList || agencies;
+      await syncDataToSheet(token, sheetId, projs, ents, ags);
       setSyncingState('synced');
       updateLastSyncedTime();
     } catch (err) {
@@ -287,10 +334,46 @@ export default function App() {
     setSyncingState('syncing');
     try {
       const loaded = await loadDataFromSheet(token, sheetId);
-      setProjects(loaded.projects);
-      saveProjects(loaded.projects);
-      setEntries(loaded.entries);
-      saveEntries(loaded.entries);
+      const currentLocalProjects = getProjects();
+      const currentLocalEntries = getEntries();
+      const currentLocalAgencies = getAgencies();
+
+      const mergedProjects = loaded.projects.map(sp => {
+        const lp = currentLocalProjects.find(p => p.id === sp.id);
+        if (!lp) return sp;
+        return {
+          ...sp,
+          description: sp.description || lp.description,
+          dayRate: sp.dayRate ?? lp.dayRate,
+          hoursInDay: sp.hoursInDay ?? lp.hoursInDay
+        };
+      });
+      currentLocalProjects.forEach(lp => {
+        if (!mergedProjects.some(p => p.id === lp.id)) {
+          mergedProjects.push(lp);
+        }
+      });
+
+      const mergedEntries = [...loaded.entries];
+      currentLocalEntries.forEach(le => {
+        if (!mergedEntries.some(e => e.id === le.id)) {
+          mergedEntries.push(le);
+        }
+      });
+
+      const mergedAgencies = [...loaded.agencies];
+      currentLocalAgencies.forEach(la => {
+        if (!mergedAgencies.some(a => a.id === la.id)) {
+          mergedAgencies.push(la);
+        }
+      });
+
+      setProjects(mergedProjects);
+      saveProjects(mergedProjects);
+      setEntries(mergedEntries);
+      saveEntries(mergedEntries);
+      setAgencies(mergedAgencies);
+      saveAgencies(mergedAgencies);
       setSyncingState('synced');
       updateLastSyncedTime();
     } catch (err: any) {
@@ -354,10 +437,46 @@ export default function App() {
       if (syncingState === 'idle' || syncingState === 'synced') {
         try {
           const loaded = await loadDataFromSheet(accessToken, spreadsheetId);
-          setProjects(loaded.projects);
-          setEntries(loaded.entries);
-          saveProjects(loaded.projects);
-          saveEntries(loaded.entries);
+          const currentLocalProjects = getProjects();
+          const currentLocalEntries = getEntries();
+          const currentLocalAgencies = getAgencies();
+
+          const mergedProjects = loaded.projects.map(sp => {
+            const lp = currentLocalProjects.find(p => p.id === sp.id);
+            if (!lp) return sp;
+            return {
+              ...sp,
+              description: sp.description || lp.description,
+              dayRate: sp.dayRate ?? lp.dayRate,
+              hoursInDay: sp.hoursInDay ?? lp.hoursInDay
+            };
+          });
+          currentLocalProjects.forEach(lp => {
+            if (!mergedProjects.some(p => p.id === lp.id)) {
+              mergedProjects.push(lp);
+            }
+          });
+
+          const mergedEntries = [...loaded.entries];
+          currentLocalEntries.forEach(le => {
+            if (!mergedEntries.some(e => e.id === le.id)) {
+              mergedEntries.push(le);
+            }
+          });
+
+          const mergedAgencies = [...loaded.agencies];
+          currentLocalAgencies.forEach(la => {
+            if (!mergedAgencies.some(a => a.id === la.id)) {
+              mergedAgencies.push(la);
+            }
+          });
+
+          setProjects(mergedProjects);
+          saveProjects(mergedProjects);
+          setEntries(mergedEntries);
+          saveEntries(mergedEntries);
+          setAgencies(mergedAgencies);
+          saveAgencies(mergedAgencies);
           updateLastSyncedTime();
         } catch (err) {
           console.warn('Silent collaboration background reload failed:', err);
@@ -444,7 +563,17 @@ export default function App() {
         // 1. Fetch latest data from sheet to prevent overwriting other users' updates
         const loaded = await loadDataFromSheet(token, sheetId);
         
-        let updatedProjects = [...loaded.projects];
+        const localProjs = getProjects();
+        let updatedProjects = loaded.projects.map(sp => {
+          const lp = localProjs.find(p => p.id === sp.id);
+          if (!lp) return sp;
+          return {
+            ...sp,
+            description: sp.description || lp.description,
+            dayRate: sp.dayRate ?? lp.dayRate,
+            hoursInDay: sp.hoursInDay ?? lp.hoursInDay
+          };
+        });
         let updatedEntries = [...loaded.entries];
 
         // 2. Apply mutation to the fresh database state
@@ -479,7 +608,7 @@ export default function App() {
         }
 
         // 3. Sync merged data back to Google Sheet
-        await syncDataToSheet(token, sheetId, updatedProjects, updatedEntries);
+        await syncDataToSheet(token, sheetId, updatedProjects, updatedEntries, agencies);
 
         // 4. Update state with merged results
         setProjects(updatedProjects);
@@ -557,7 +686,7 @@ export default function App() {
   };
 
   // Add agency handler
-  const handleAddAgency = (newAgency: Omit<Agency, 'id' | 'createdAt'>) => {
+  const handleAddAgency = async (newAgency: Omit<Agency, 'id' | 'createdAt'>) => {
     const agency: Agency = {
       ...newAgency,
       id: `agency-${Date.now()}`,
@@ -566,20 +695,50 @@ export default function App() {
     const updated = [...agencies, agency];
     setAgencies(updated);
     saveAgencies(updated);
+
+    const token = accessToken || await getAccessToken();
+    const sheetId = spreadsheetId || localStorage.getItem('timesheet_recorder_spreadsheet_id');
+    if (token && sheetId) {
+      try {
+        await syncDataToSheet(token, sheetId, projects, entries, updated);
+      } catch (err) {
+        console.warn('Failed to sync added agency to sheet:', err);
+      }
+    }
   };
 
   // Delete agency handler
-  const handleDeleteAgency = (agencyId: string) => {
+  const handleDeleteAgency = async (agencyId: string) => {
     const updated = agencies.filter(a => a.id !== agencyId);
     setAgencies(updated);
     saveAgencies(updated);
+
+    const token = accessToken || await getAccessToken();
+    const sheetId = spreadsheetId || localStorage.getItem('timesheet_recorder_spreadsheet_id');
+    if (token && sheetId) {
+      try {
+        await syncDataToSheet(token, sheetId, projects, entries, updated);
+      } catch (err) {
+        console.warn('Failed to sync deleted agency to sheet:', err);
+      }
+    }
   };
 
   // Edit agency handler
-  const handleEditAgency = (updatedAgency: Agency) => {
+  const handleEditAgency = async (updatedAgency: Agency) => {
     const updated = agencies.map(a => a.id === updatedAgency.id ? updatedAgency : a);
     setAgencies(updated);
     saveAgencies(updated);
+
+    const token = accessToken || await getAccessToken();
+    const sheetId = spreadsheetId || localStorage.getItem('timesheet_recorder_spreadsheet_id');
+    if (token && sheetId) {
+      try {
+        await syncDataToSheet(token, sheetId, projects, entries, updated);
+      } catch (err) {
+        console.warn('Failed to sync edited agency to sheet:', err);
+      }
+    }
   };
 
   const handleDismissAlert = (alertId: string) => {

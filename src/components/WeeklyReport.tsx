@@ -6,6 +6,7 @@
 import React, { useState, useMemo } from 'react';
 import { Project, TimeEntry } from '../types';
 import { Download, Printer, Calendar, Clock, Sparkles, TrendingUp, HelpCircle, FileText, CheckCircle, Coffee, AlertCircle } from 'lucide-react';
+import { formatDateDMY } from '../utils/formatters';
 
 interface WeeklyReportProps {
   entries: TimeEntry[];
@@ -227,6 +228,16 @@ export default function WeeklyReport({ entries, projects }: WeeklyReportProps) {
     return { billable, nonBillable };
   }, [activeEntries, projects]);
 
+  // Total earnings for the active selection
+  const activeEarnings = useMemo(() => {
+    return activeEntries.reduce((sum, e) => {
+      const proj = projects.find(p => p.id === e.projectId);
+      if (!proj || proj.isNonBillable) return sum;
+      const rateVal = proj.rate ?? (proj.dayRate && proj.hoursInDay ? proj.dayRate / proj.hoursInDay : 0);
+      return sum + (e.hours * rateVal);
+    }, 0);
+  }, [activeEntries, projects]);
+
   // Group by project code
   const projectContributions = useMemo(() => {
     const map: { [key: string]: number } = {};
@@ -338,7 +349,13 @@ export default function WeeklyReport({ entries, projects }: WeeklyReportProps) {
       setTimeout(() => setErrorNotification(null), 5000);
       return;
     }
-    window.print();
+    try {
+      window.print();
+    } catch (err) {
+      console.error("Print dialog execution failed:", err);
+      setErrorNotification("Print dialog could not be invoked. Please press Ctrl+P (Cmd+P on Mac) to print this page.");
+      setTimeout(() => setErrorNotification(null), 7000);
+    }
   };
 
   const maxDailyHours = useMemo(() => {
@@ -476,7 +493,7 @@ export default function WeeklyReport({ entries, projects }: WeeklyReportProps) {
             </h1>
             <p className="text-xs text-zinc-500 dark:text-gray-400 font-mono flex items-center space-x-1.5">
               {viewMode === 'weekly' ? (
-                <span>Period: <strong>{selectedWeekStart}</strong> to <strong>{selectedWeekEnd}</strong></span>
+                <span>Period: <strong>{formatDateDMY(selectedWeekStart)}</strong> to <strong>{formatDateDMY(selectedWeekEnd)}</strong></span>
               ) : (
                 <span>Month: <strong>{monthsList.find(m => m.value === selectedMonth)?.label || selectedMonth}</strong></span>
               )}
@@ -487,12 +504,12 @@ export default function WeeklyReport({ entries, projects }: WeeklyReportProps) {
             <span className="text-[10px] px-2.5 py-1 rounded-full bg-zinc-100 dark:bg-[#252525] border border-zinc-200 dark:border-[#2F2F2F] text-zinc-500 dark:text-[#E0E0E0]">
               STRICTLY CONFIDENTIAL
             </span>
-            <p className="text-[10px] text-zinc-400 dark:text-gray-500 mt-2">Compiled at: {new Date().toLocaleDateString()}</p>
+            <p className="text-[10px] text-zinc-400 dark:text-gray-500 mt-2">Compiled at: {formatDateDMY(new Date().toISOString().split('T')[0])}</p>
           </div>
         </div>
 
         {/* Key Metrics Columns */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 py-2">
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3 py-2">
           <div className="p-3 border border-zinc-150 dark:border-[#2F2F2F] rounded-lg space-y-1 bg-zinc-50/10 dark:bg-zinc-950/10">
             <span className="text-[10px] uppercase font-mono text-zinc-400 dark:text-zinc-500">
               {viewMode === 'weekly' ? 'Weekly Effort' : 'Monthly Effort'}
@@ -502,6 +519,14 @@ export default function WeeklyReport({ entries, projects }: WeeklyReportProps) {
           <div className="p-3 border border-emerald-150 dark:border-emerald-950 rounded-lg space-y-1 bg-emerald-500/5">
             <span className="text-[10px] uppercase font-mono text-emerald-650 dark:text-emerald-400 font-bold">Billable Effort</span>
             <p className="text-lg font-bold font-mono text-emerald-600 dark:text-emerald-450">{weeklyEffortSplit.billable} hrs</p>
+          </div>
+          <div className="p-3 border border-emerald-200 dark:border-emerald-900/60 rounded-lg space-y-1 bg-emerald-500/10 dark:bg-emerald-950/30">
+            <span className="text-[10px] uppercase font-mono text-emerald-700 dark:text-emerald-350 font-bold">
+              {viewMode === 'weekly' ? 'Weekly Earnings' : 'Monthly Earnings'}
+            </span>
+            <p className="text-lg font-bold font-mono text-emerald-700 dark:text-emerald-400">
+              £{activeEarnings.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </p>
           </div>
           <div className="p-3 border border-zinc-200 dark:border-zinc-800 rounded-lg space-y-1 bg-zinc-100/10 dark:bg-zinc-800/10">
             <span className="text-[10px] uppercase font-mono text-zinc-500 dark:text-zinc-400 font-bold">Non-Billable</span>
@@ -605,50 +630,59 @@ export default function WeeklyReport({ entries, projects }: WeeklyReportProps) {
                   Corporate logs are completely vacant. Silence implies compliance.
                 </p>
               ) : (
-                activeEntries.map(e => (
-                  <div key={e.id} className="text-[11px] leading-relaxed border-l-2 border-zinc-300 dark:border-[#3F3F3F] pl-2.5">
-                    <span className="font-mono text-zinc-400 font-bold mr-1">[{e.date}]</span>
-                    <span className="text-zinc-700 dark:text-zinc-300 italic">"{e.comment}"</span>
-                  </div>
-                ))
+                activeEntries.map(e => {
+                  const proj = projects.find(p => p.id === e.projectId);
+                  const projName = proj ? proj.name : 'Unlisted Project';
+                  const formattedDate = formatDateDMY(e.date);
+                  return (
+                    <div key={e.id} className="text-[11px] leading-relaxed border-l-2 border-zinc-300 dark:border-[#3F3F3F] pl-2.5 py-0.5">
+                      <span className="font-mono text-zinc-900 dark:text-zinc-100 font-bold mr-1.5">{projName}</span>
+                      <span className="font-mono text-zinc-400 dark:text-zinc-500 text-[10px] font-bold mr-1.5">[{formattedDate}]</span>
+                      <span className="text-zinc-700 dark:text-zinc-300 italic">"{e.comment}"</span>
+                    </div>
+                  );
+                })
               )}
             </div>
 
-            {/* Caffeine Audit Counters */}
-            <div className="bg-amber-500/5 dark:bg-amber-500/10 border border-amber-500/15 dark:border-amber-500/20 rounded-xl p-3.5 space-y-2.5 print:hidden">
-              <div className="flex items-center space-x-1.5 text-amber-700 dark:text-amber-500">
-                <Coffee className="w-3.5 h-3.5" />
-                <h4 className="text-[10px] font-bold font-mono uppercase tracking-wider">Caffeine Consumed Counter</h4>
+            {/* Caffeine Audit Counters & Auditor Review Aligned Side-By-Side */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 pt-1">
+              {/* Caffeine Audit Counters */}
+              <div className="bg-amber-500/5 dark:bg-amber-500/10 border border-amber-500/15 dark:border-amber-500/20 rounded-xl p-3.5 space-y-2.5 flex flex-col justify-between">
+                <div className="flex items-center space-x-1.5 text-amber-700 dark:text-amber-500">
+                  <Coffee className="w-3.5 h-3.5" />
+                  <h4 className="text-[10px] font-bold font-mono uppercase tracking-wider">Caffeine Consumed Counter</h4>
+                </div>
+                <div className="grid grid-cols-3 gap-1.5 font-mono">
+                  <div className="p-2 bg-zinc-50 dark:bg-[#191919] border border-zinc-200 dark:border-[#2F2F2F] rounded-lg space-y-0.5">
+                    <span className="text-[8px] uppercase text-zinc-400">{viewMode === 'weekly' ? 'Weekly' : 'Period'}</span>
+                    <p className="text-xs font-bold text-amber-600 dark:text-amber-500">{totalWeeklyCoffees} cups</p>
+                  </div>
+                  <div className="p-2 bg-zinc-50 dark:bg-[#191919] border border-zinc-200 dark:border-[#2F2F2F] rounded-lg space-y-0.5">
+                    <span className="text-[8px] uppercase text-zinc-400">Monthly</span>
+                    <p className="text-xs font-bold text-amber-600 dark:text-amber-500">{totalMonthlyCoffees} cups</p>
+                  </div>
+                  <div className="p-2 bg-zinc-50 dark:bg-[#191919] border border-zinc-200 dark:border-[#2F2F2F] rounded-lg space-y-0.5">
+                    <span className="text-[8px] uppercase text-zinc-400">Annual</span>
+                    <p className="text-xs font-bold text-amber-600 dark:text-amber-500">{totalAnnualCoffees} cups</p>
+                  </div>
+                </div>
               </div>
-              <div className="grid grid-cols-3 gap-2 font-mono">
-                <div className="p-2 bg-zinc-50 dark:bg-[#191919] border border-zinc-200 dark:border-[#2F2F2F] rounded-lg space-y-0.5">
-                  <span className="text-[8px] uppercase text-zinc-400">{viewMode === 'weekly' ? 'Weekly' : 'Active Period'}</span>
-                  <p className="text-xs font-bold text-amber-600 dark:text-amber-500">{totalWeeklyCoffees} cups</p>
-                </div>
-                <div className="p-2 bg-zinc-50 dark:bg-[#191919] border border-zinc-200 dark:border-[#2F2F2F] rounded-lg space-y-0.5">
-                  <span className="text-[8px] uppercase text-zinc-400">Monthly</span>
-                  <p className="text-xs font-bold text-amber-600 dark:text-amber-500">{totalMonthlyCoffees} cups</p>
-                </div>
-                <div className="p-2 bg-zinc-50 dark:bg-[#191919] border border-zinc-200 dark:border-[#2F2F2F] rounded-lg space-y-0.5">
-                  <span className="text-[8px] uppercase text-zinc-400">Annual</span>
-                  <p className="text-xs font-bold text-amber-600 dark:text-amber-500">{totalAnnualCoffees} cups</p>
-                </div>
-              </div>
-            </div>
 
-            {/* Auditor Review Panel (Moved here) */}
-            <div className="p-4 rounded-xl bg-zinc-50 dark:bg-[#252525] border border-zinc-150/70 dark:border-[#2F2F2F] space-y-3 shadow-xs">
-              <div className="space-y-1">
-                <div className="flex items-center space-x-1.5 text-zinc-500">
-                  <Sparkles className="w-3.5 h-3.5 text-amber-500 animate-pulse" />
-                  <span className="text-[10px] uppercase tracking-wider font-mono font-bold">Auditor Review</span>
+              {/* Auditor Review Panel */}
+              <div className="p-3.5 rounded-xl bg-zinc-50 dark:bg-[#252525] border border-zinc-150/70 dark:border-[#2F2F2F] space-y-2.5 shadow-xs flex flex-col justify-between">
+                <div className="space-y-1">
+                  <div className="flex items-center space-x-1.5 text-zinc-500">
+                    <Sparkles className="w-3.5 h-3.5 text-amber-500 animate-pulse" />
+                    <span className="text-[10px] uppercase tracking-wider font-mono font-bold">Auditor Review</span>
+                  </div>
+                  <h3 className="text-xs font-bold text-zinc-850 dark:text-zinc-100 font-mono">{review.title}</h3>
+                  <p className="text-[11px] text-zinc-500 dark:text-gray-400 italic leading-snug">"{review.desc}"</p>
                 </div>
-                <h3 className="text-sm font-bold text-zinc-850 dark:text-zinc-100 font-mono">{review.title}</h3>
-                <p className="text-xs text-zinc-500 dark:text-gray-400 italic">"{review.desc}"</p>
-              </div>
-              <div className="border-t border-zinc-200/60 dark:border-[#2F2F2F] pt-2.5 font-mono space-y-0.5">
-                <span className="text-[10px] text-zinc-400 block">Performance Index</span>
-                <span className="text-xs font-bold text-zinc-800 dark:text-zinc-300">{review.rating}</span>
+                <div className="border-t border-zinc-200/60 dark:border-[#2F2F2F] pt-1.5 font-mono flex items-center justify-between">
+                  <span className="text-[9px] text-zinc-400">Performance Index:</span>
+                  <span className="text-xs font-bold text-zinc-800 dark:text-zinc-300">{review.rating}</span>
+                </div>
               </div>
             </div>
           </div>

@@ -41,6 +41,7 @@ export default function TimesheetForm({ projects, onAddEntry, selectedDate, setS
   const [showTagGuide, setShowTagGuide] = useState(false);
   const [editingTagId, setEditingTagId] = useState<string | null>(null);
   const [editingTagName, setEditingTagName] = useState('');
+  const [tagToDelete, setTagToDelete] = useState<Tag | null>(null);
 
   // If projectId is empty but we have projects, auto-select the first one
   useEffect(() => {
@@ -335,7 +336,7 @@ export default function TimesheetForm({ projects, onAddEntry, selectedDate, setS
           <div className="space-y-1 relative">
             <div className="flex items-center justify-between">
               <label className="text-xs font-mono font-bold text-zinc-500 dark:text-gray-400">
-                Tags (Rapid Keyboard Selection)
+                Type tag to create
               </label>
               <button
                 type="button"
@@ -420,7 +421,7 @@ export default function TimesheetForm({ projects, onAddEntry, selectedDate, setS
             {globalTags.length > 0 && (
               <div className="mt-2 space-y-1.5">
                 <span className="text-[10px] font-mono font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider block">
-                  Quick Add / Toggle Available Tags:
+                  Quick Add:
                 </span>
                 <div className="flex flex-wrap gap-1.5">
                   {globalTags.map(tag => {
@@ -491,7 +492,7 @@ export default function TimesheetForm({ projects, onAddEntry, selectedDate, setS
                           type="button"
                           onClick={(e) => {
                             e.stopPropagation();
-                            handleDeleteGlobalTag(tag.id);
+                            setTagToDelete(tag);
                           }}
                           className="pr-2 pl-1.5 py-0.5 hover:text-rose-600 dark:hover:text-rose-400 border-l border-zinc-200/50 dark:border-zinc-800/40 transition-colors focus:outline-none cursor-pointer"
                           title={`Delete "${tag.name}" permanently from presets`}
@@ -504,6 +505,56 @@ export default function TimesheetForm({ projects, onAddEntry, selectedDate, setS
                 </div>
               </div>
             )}
+
+            {/* Confirmation Modal for deleting Quick Add Tag */}
+            <AnimatePresence>
+              {tagToDelete && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-zinc-950/60 dark:bg-black/75 backdrop-blur-md">
+                  <motion.div
+                    initial={{ opacity: 0, scale: 0.95 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.95 }}
+                    className="w-full max-w-sm rounded-2xl border border-zinc-200 dark:border-[#2F2F2F] bg-white dark:bg-[#1A1A1A] p-6 shadow-2xl space-y-4 font-mono"
+                  >
+                    <div className="flex items-center space-x-3 text-amber-600 dark:text-amber-500">
+                      <div className="p-2 rounded-xl bg-amber-500/10 dark:bg-amber-500/20 border border-amber-500/20">
+                        <AlertCircle className="w-5 h-5 text-amber-600 dark:text-amber-500" />
+                      </div>
+                      <div>
+                        <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100 uppercase tracking-wide">
+                          Delete Quick Add Tag
+                        </h3>
+                        <p className="text-[10px] text-zinc-400">Confirmation Required</p>
+                      </div>
+                    </div>
+
+                    <p className="text-xs text-zinc-600 dark:text-zinc-300 leading-relaxed">
+                      Are you sure you want to delete the tag preset <strong className="text-zinc-900 dark:text-white font-bold">"{tagToDelete.name}"</strong>? This will permanently remove it from your Quick Add tags.
+                    </p>
+
+                    <div className="flex items-center justify-end space-x-2 pt-2 border-t border-zinc-100 dark:border-zinc-800">
+                      <button
+                        type="button"
+                        onClick={() => setTagToDelete(null)}
+                        className="px-3 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-300 text-xs font-semibold cursor-pointer"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          handleDeleteGlobalTag(tagToDelete.id);
+                          setTagToDelete(null);
+                        }}
+                        className="px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold shadow cursor-pointer"
+                      >
+                        Delete Tag
+                      </button>
+                    </div>
+                  </motion.div>
+                </div>
+              )}
+            </AnimatePresence>
 
             {/* Collapsible Tag Management Guide */}
             {showTagGuide && (

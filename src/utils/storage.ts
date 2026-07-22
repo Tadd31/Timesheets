@@ -5,12 +5,65 @@
 
 import { Project, TimeEntry, Tag, BudgetAlert, Agency } from '../types';
 
-const PROJECTS_KEY = 'timesheet_recorder_projects_fresh_v2';
-const ENTRIES_KEY = 'timesheet_recorder_entries_fresh_v2';
+// Primary stable keys that will never change across versions
+const PRIMARY_PROJECTS_KEY = 'timesheet_recorder_projects_data';
+const PRIMARY_ENTRIES_KEY = 'timesheet_recorder_entries_data';
+const PRIMARY_TAGS_KEY = 'timesheet_recorder_tags_data';
+const PRIMARY_ALERTS_KEY = 'timesheet_recorder_alerts_data';
+const PRIMARY_AGENCIES_KEY = 'timesheet_recorder_agencies_data';
 const DARK_MODE_KEY = 'timesheet_recorder_dark_mode';
-const TAGS_KEY = 'timesheet_recorder_tags_fresh_v2';
-const ALERTS_KEY = 'timesheet_recorder_alerts_fresh_v2';
-const AGENCIES_KEY = 'timesheet_recorder_agencies_v1';
+
+// Candidate keys from older/previous versions for backwards compatibility & auto-migration
+const PROJECT_KEYS = [
+  PRIMARY_PROJECTS_KEY,
+  'timesheet_recorder_projects_fresh_v2',
+  'timesheet_recorder_projects_fresh_v1',
+  'timesheet_recorder_projects_fresh',
+  'timesheet_recorder_projects_v2',
+  'timesheet_recorder_projects_v1',
+  'timesheet_recorder_projects',
+  'timesheet_projects',
+  'projects'
+];
+
+const ENTRY_KEYS = [
+  PRIMARY_ENTRIES_KEY,
+  'timesheet_recorder_entries_fresh_v2',
+  'timesheet_recorder_entries_fresh_v1',
+  'timesheet_recorder_entries_fresh',
+  'timesheet_recorder_entries_v2',
+  'timesheet_recorder_entries_v1',
+  'timesheet_recorder_entries',
+  'timesheet_entries',
+  'entries'
+];
+
+const TAG_KEYS = [
+  PRIMARY_TAGS_KEY,
+  'timesheet_recorder_tags_fresh_v2',
+  'timesheet_recorder_tags_fresh_v1',
+  'timesheet_recorder_tags_v2',
+  'timesheet_recorder_tags_v1',
+  'timesheet_recorder_tags',
+  'timesheet_tags',
+  'tags'
+];
+
+const ALERT_KEYS = [
+  PRIMARY_ALERTS_KEY,
+  'timesheet_recorder_alerts_fresh_v2',
+  'timesheet_recorder_alerts_fresh_v1',
+  'timesheet_recorder_alerts_v2',
+  'timesheet_recorder_alerts',
+  'timesheet_alerts'
+];
+
+const AGENCY_KEYS = [
+  PRIMARY_AGENCIES_KEY,
+  'timesheet_recorder_agencies_v1',
+  'timesheet_recorder_agencies',
+  'agencies'
+];
 
 const INITIAL_PROJECTS: Project[] = [];
 const INITIAL_ENTRIES: TimeEntry[] = [];
@@ -24,35 +77,57 @@ const INITIAL_TAGS: Tag[] = [
 const INITIAL_ALERTS: BudgetAlert[] = [];
 const INITIAL_AGENCIES: Agency[] = [];
 
-export function getProjects(): Project[] {
-  const data = localStorage.getItem(PROJECTS_KEY);
-  if (!data) {
-    saveProjects(INITIAL_PROJECTS);
-    return INITIAL_PROJECTS;
+// Helper to find non-empty array data across candidate keys
+function loadFromCandidateKeys<T>(keys: string[]): T | null {
+  for (const key of keys) {
+    try {
+      const item = localStorage.getItem(key);
+      if (item) {
+        const parsed = JSON.parse(item);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed as unknown as T;
+        }
+      }
+    } catch {
+      // ignore parse errors
+    }
   }
-  return JSON.parse(data);
+  return null;
+}
+
+export function getProjects(): Project[] {
+  const found = loadFromCandidateKeys<Project[]>(PROJECT_KEYS);
+  if (found) {
+    saveProjects(found); // migrate to primary + legacy keys
+    return found;
+  }
+  return INITIAL_PROJECTS;
 }
 
 export function saveProjects(projects: Project[]): void {
-  localStorage.setItem(PROJECTS_KEY, JSON.stringify(projects));
+  const json = JSON.stringify(projects);
+  localStorage.setItem(PRIMARY_PROJECTS_KEY, json);
+  localStorage.setItem('timesheet_recorder_projects_fresh_v2', json);
 }
 
 export function getEntries(): TimeEntry[] {
-  const data = localStorage.getItem(ENTRIES_KEY);
-  if (!data) {
-    saveEntries(INITIAL_ENTRIES);
-    return INITIAL_ENTRIES;
+  const found = loadFromCandidateKeys<TimeEntry[]>(ENTRY_KEYS);
+  if (found) {
+    saveEntries(found); // migrate to primary + legacy keys
+    return found;
   }
-  return JSON.parse(data);
+  return INITIAL_ENTRIES;
 }
 
 export function saveEntries(entries: TimeEntry[]): void {
-  localStorage.setItem(ENTRIES_KEY, JSON.stringify(entries));
+  const json = JSON.stringify(entries);
+  localStorage.setItem(PRIMARY_ENTRIES_KEY, json);
+  localStorage.setItem('timesheet_recorder_entries_fresh_v2', json);
 }
 
 export function getDarkMode(): boolean {
   const data = localStorage.getItem(DARK_MODE_KEY);
-  return data ? JSON.parse(data) : true; // Default to dark mode because it fits the sleek look nicely, or support toggles
+  return data ? JSON.parse(data) : true;
 }
 
 export function saveDarkMode(isDark: boolean): void {
@@ -60,49 +135,51 @@ export function saveDarkMode(isDark: boolean): void {
 }
 
 export function getTags(): Tag[] {
-  const data = localStorage.getItem(TAGS_KEY);
-  if (!data) {
-    saveTags(INITIAL_TAGS);
-    return INITIAL_TAGS;
+  const found = loadFromCandidateKeys<Tag[]>(TAG_KEYS);
+  if (found) {
+    saveTags(found);
+    return found;
   }
-  return JSON.parse(data);
+  saveTags(INITIAL_TAGS);
+  return INITIAL_TAGS;
 }
 
 export function saveTags(tags: Tag[]): void {
-  localStorage.setItem(TAGS_KEY, JSON.stringify(tags));
+  const json = JSON.stringify(tags);
+  localStorage.setItem(PRIMARY_TAGS_KEY, json);
+  localStorage.setItem('timesheet_recorder_tags_fresh_v2', json);
 }
 
 export function getAlerts(): BudgetAlert[] {
-  const data = localStorage.getItem(ALERTS_KEY);
-  if (!data) {
-    saveAlerts(INITIAL_ALERTS);
-    return INITIAL_ALERTS;
+  const found = loadFromCandidateKeys<BudgetAlert[]>(ALERT_KEYS);
+  if (found) {
+    saveAlerts(found);
+    return found;
   }
-  return JSON.parse(data);
+  return INITIAL_ALERTS;
 }
 
 export function saveAlerts(alerts: BudgetAlert[]): void {
-  localStorage.setItem(ALERTS_KEY, JSON.stringify(alerts));
+  const json = JSON.stringify(alerts);
+  localStorage.setItem(PRIMARY_ALERTS_KEY, json);
+  localStorage.setItem('timesheet_recorder_alerts_fresh_v2', json);
 }
 
 export function getAgencies(): Agency[] {
-  const data = localStorage.getItem(AGENCIES_KEY);
-  if (!data) {
-    saveAgencies(INITIAL_AGENCIES);
-    return INITIAL_AGENCIES;
-  }
-  const parsed = JSON.parse(data) as Agency[];
+  const found = loadFromCandidateKeys<Agency[]>(AGENCY_KEYS);
+  const parsed = found || INITIAL_AGENCIES;
   const filtered = parsed.filter(
     (a) => a.name !== 'Aether Digital' && a.name !== 'Vanguard Creative'
   );
-  if (filtered.length !== parsed.length) {
+  if (filtered.length > 0) {
     saveAgencies(filtered);
     return filtered;
   }
-  return parsed;
+  return INITIAL_AGENCIES;
 }
 
 export function saveAgencies(agencies: Agency[]): void {
-  localStorage.setItem(AGENCIES_KEY, JSON.stringify(agencies));
+  const json = JSON.stringify(agencies);
+  localStorage.setItem(PRIMARY_AGENCIES_KEY, json);
+  localStorage.setItem('timesheet_recorder_agencies_v1', json);
 }
-

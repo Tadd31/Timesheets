@@ -56,16 +56,15 @@ input[type="date"]::-webkit-calendar-picker-indicator:hover {
 
 /* Print Specific Utility Classes */
 @media print {
-  /* Hide interactive screens, headers, buttons, toggles */
+  /* Hide interactive chrome, navigation, headers, forms */
   .print\:hidden,
-  button,
   select,
-  form,
-  header,
-  nav,
   input,
   textarea,
-  #humor-banner {
+  #humor-banner,
+  nav,
+  header,
+  footer {
     display: none !important;
   }
 
@@ -75,7 +74,7 @@ input[type="date"]::-webkit-calendar-picker-indicator:hover {
     color: black !important;
   }
 
-  /* Reset layout constraints */
+  /* Reset layout constraints for report container */
   main, .container, #weekly-report-container {
     width: 100% !important;
     max-width: 100% !important;
@@ -86,7 +85,7 @@ input[type="date"]::-webkit-calendar-picker-indicator:hover {
     background: white !important;
   }
 
-  /* Ensure background colors print properly */
+  /* Ensure background colors, badges and progress bars print accurately */
   * {
     -webkit-print-color-adjust: exact !important;
     print-color-adjust: exact !important;

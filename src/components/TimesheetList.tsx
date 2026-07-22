@@ -8,6 +8,7 @@ import { Project, TimeEntry, Tag } from '../types';
 import { Trash2, Filter, Calendar, Folder, Clock, Hash, CheckSquare, Coffee, Pencil, Check, X } from 'lucide-react';
 import { getTags } from '../utils/storage';
 import { motion, AnimatePresence } from 'motion/react';
+import { formatDateDMY } from '../utils/formatters';
 
 interface TimesheetListProps {
   entries: TimeEntry[];
@@ -275,7 +276,7 @@ export default function TimesheetList({ entries, projects, onDeleteEntry, onEdit
                             className="text-[11px] font-mono py-1 px-1.5 rounded border border-zinc-200 dark:border-[#2F2F2F] bg-white dark:bg-[#191919] text-zinc-800 dark:text-[#E0E0E0] focus:outline-none focus:ring-1 focus:ring-blue-500"
                           />
                         ) : (
-                          entry.date
+                          formatDateDMY(entry.date)
                         )}
                       </td>
 

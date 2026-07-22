@@ -14,7 +14,7 @@ import {
   User
 } from 'firebase/auth';
 import firebaseConfig from '../../firebase-applet-config.json';
-import { Project, TimeEntry } from '../types';
+import { Project, TimeEntry, Agency } from '../types';
 
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
@@ -144,6 +144,36 @@ export async function findSpreadsheet(accessToken: string): Promise<string | nul
   }
 }
 
+export async function ensureAgenciesSheet(accessToken: string, spreadsheetId: string): Promise<void> {
+  try {
+    const res = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}?fields=sheets.properties.title`, {
+      headers: { Authorization: `Bearer ${accessToken}` }
+    });
+    if (res.ok) {
+      const data = await res.json();
+      const titles = (data.sheets || []).map((s: any) => s.properties?.title);
+      if (!titles.includes('Registered Agencies')) {
+        await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}:batchUpdate`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            requests: [{
+              addSheet: {
+                properties: { title: 'Registered Agencies' }
+              }
+            }]
+          })
+        });
+      }
+    }
+  } catch (e) {
+    console.warn('Failed to ensure Registered Agencies sheet tab:', e);
+  }
+}
+
 export async function createSpreadsheet(accessToken: string): Promise<string> {
   const url = 'https://sheets.googleapis.com/v4/spreadsheets';
   const res = await fetch(url, {
@@ -166,6 +196,11 @@ export async function createSpreadsheet(accessToken: string): Promise<string> {
           properties: {
             title: 'Timesheet Entries'
           }
+        },
+        {
+          properties: {
+            title: 'Registered Agencies'
+          }
         }
       ]
     })
@@ -184,6 +219,7 @@ export async function createSpreadsheet(accessToken: string): Promise<string> {
 }
 
 export async function writeHeaders(accessToken: string, spreadsheetId: string): Promise<void> {
+  await ensureAgenciesSheet(accessToken, spreadsheetId);
   const url = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values:batchUpdate`;
   const res = await fetch(url, {
     method: 'POST',
@@ -195,12 +231,16 @@ export async function writeHeaders(accessToken: string, spreadsheetId: string): 
       valueInputOption: 'USER_ENTERED',
       data: [
         {
-          range: 'Projects!A1:L1',
-          values: [['ID', 'Name', 'Agency Name', 'Brand Name', 'Rate ($)', 'Estimated Hours', 'Budget Hours', 'Start Date', 'End Date', 'Is Non-Billable', 'Created By', 'Created At']]
+          range: 'Projects!A1:O1',
+          values: [['ID', 'Name', 'Agency Name', 'Brand Name', 'Rate ($)', 'Estimated Hours', 'Budget Hours', 'Start Date', 'End Date', 'Is Non-Billable', 'Created By', 'Created At', 'Description', 'Day Rate', 'Hours in Day']]
         },
         {
           range: 'Timesheet Entries!A1:K1',
           values: [['ID', 'Project ID', 'Project Name', 'Date', 'Hours', 'Comment', 'Coffees Logged', 'Tag IDs', 'Logged By Name', 'Logged By Email', 'Created At']]
+        },
+        {
+          range: 'Registered Agencies!A1:G1',
+          values: [['ID', 'Name', 'Address', 'URL', 'Contact Email', 'Finance Email', 'Created At']]
         }
       ]
     })
@@ -215,8 +255,11 @@ export async function syncDataToSheet(
   accessToken: string,
   spreadsheetId: string,
   projects: Project[],
-  entries: TimeEntry[]
+  entries: TimeEntry[],
+  agencies: Agency[] = []
 ): Promise<void> {
+  await ensureAgenciesSheet(accessToken, spreadsheetId);
+
   // First clear any existing rows below row 1
   const clearUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values:batchClear`;
   const clearRes = await fetch(clearUrl, {
@@ -226,7 +269,7 @@ export async function syncDataToSheet(
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      ranges: ['Projects!A2:L10000', 'Timesheet Entries!A2:K10000']
+      ranges: ['Projects!A2:O10000', 'Timesheet Entries!A2:K10000', 'Registered Agencies!A2:G10000']
     })
   });
   if (!clearRes.ok) {
@@ -249,7 +292,10 @@ export async function syncDataToSheet(
     p.endDate || "",
     p.isNonBillable ? "TRUE" : "FALSE",
     p.createdBy || "",
-    p.createdAt || ""
+    p.createdAt || "",
+    p.description || "",
+    p.dayRate !== undefined && p.dayRate !== null ? p.dayRate : "",
+    p.hoursInDay !== undefined && p.hoursInDay !== null ? p.hoursInDay : ""
   ]);
 
   const entryRows = entries.map(e => {
@@ -269,16 +315,26 @@ export async function syncDataToSheet(
     ];
   });
 
+  const agencyRows = agencies.map(a => [
+    a.id,
+    a.name || "",
+    a.address || "",
+    a.url || "",
+    a.contactEmail || "",
+    a.financeEmail || "",
+    a.createdAt || ""
+  ]);
+
   const data: any[] = [];
   if (projectRows.length > 0) {
     data.push({
-      range: `Projects!A2:L${projectRows.length + 1}`,
+      range: `Projects!A2:O${projectRows.length + 1}`,
       values: projectRows
     });
   } else {
     data.push({
-      range: `Projects!A2:L2`,
-      values: [["", "", "", "", "", "", "", "", "", "", "", ""]]
+      range: `Projects!A2:O2`,
+      values: [["", "", "", "", "", "", "", "", "", "", "", "", "", "", ""]]
     });
   }
   if (entryRows.length > 0) {
@@ -290,6 +346,17 @@ export async function syncDataToSheet(
     data.push({
       range: `Timesheet Entries!A2:K2`,
       values: [["", "", "", "", "", "", "", "", "", "", ""]]
+    });
+  }
+  if (agencyRows.length > 0) {
+    data.push({
+      range: `Registered Agencies!A2:G${agencyRows.length + 1}`,
+      values: agencyRows
+    });
+  } else {
+    data.push({
+      range: `Registered Agencies!A2:G2`,
+      values: [["", "", "", "", "", "", ""]]
     });
   }
 
@@ -314,8 +381,9 @@ export async function syncDataToSheet(
 export async function loadDataFromSheet(
   accessToken: string,
   spreadsheetId: string
-): Promise<{ projects: Project[]; entries: TimeEntry[] }> {
-  const url = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values:batchGet?ranges=Projects!A2:L10000&ranges=Timesheet%20Entries!A2:K10000`;
+): Promise<{ projects: Project[]; entries: TimeEntry[]; agencies: Agency[] }> {
+  await ensureAgenciesSheet(accessToken, spreadsheetId);
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values:batchGet?ranges=Projects!A2:O10000&ranges=Timesheet%20Entries!A2:K10000&ranges=Registered%20Agencies!A2:G10000`;
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
@@ -328,6 +396,7 @@ export async function loadDataFromSheet(
 
   const projectRows = valueRanges[0]?.values || [];
   const entryRows = valueRanges[1]?.values || [];
+  const agencyRows = valueRanges[2]?.values || [];
 
   const loadedProjects: Project[] = projectRows.map((row: any) => {
     if (!row || row.length === 0 || !row[0]) return null;
@@ -344,6 +413,9 @@ export async function loadDataFromSheet(
       isNonBillable: row[9] === "TRUE",
       createdBy: row[10] || "",
       createdAt: row[11] || new Date().toISOString(),
+      description: row[12] || undefined,
+      dayRate: row[13] !== undefined && row[13] !== "" ? Number(row[13]) : undefined,
+      hoursInDay: row[14] !== undefined && row[14] !== "" ? Number(row[14]) : undefined,
     };
   }).filter((p: any): p is Project => p !== null);
 
@@ -364,5 +436,18 @@ export async function loadDataFromSheet(
     };
   }).filter((e: any): e is TimeEntry => e !== null);
 
-  return { projects: loadedProjects, entries: loadedEntries };
+  const loadedAgencies: Agency[] = agencyRows.map((row: any) => {
+    if (!row || row.length === 0 || !row[0]) return null;
+    return {
+      id: row[0],
+      name: row[1] || "",
+      address: row[2] || "",
+      url: row[3] || "",
+      contactEmail: row[4] || "",
+      financeEmail: row[5] || "",
+      createdAt: row[6] || new Date().toISOString(),
+    };
+  }).filter((a: any): a is Agency => a !== null);
+
+  return { projects: loadedProjects, entries: loadedEntries, agencies: loadedAgencies };
 }

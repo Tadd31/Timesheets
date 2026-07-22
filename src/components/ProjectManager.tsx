@@ -8,6 +8,7 @@ import { Project, TimeEntry, Agency } from '../types';
 import { Calendar, Plus, Trash2, Clock, CheckCircle2, ChevronRight, AlertTriangle, Info, Coffee, Pencil, BarChart3, TrendingDown, ChevronDown, ChevronUp, X, AlertOctagon, Building2, Globe, Mail, Link } from 'lucide-react';
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine } from 'recharts';
 import { motion, AnimatePresence } from 'motion/react';
+import { formatDateDMY } from '../utils/formatters';
 
 interface ProjectManagerProps {
   projects: Project[];
@@ -198,7 +199,7 @@ export default function ProjectManager({
       hoursInDay: numericHoursInDay,
       startDate: editStartDate,
       endDate: editEndDate,
-      description: editDescription.trim() || undefined,
+      description: editDescription.trim() || original.description || undefined,
       isNonBillable: editIsNonBillable,
       budget_hours: hours,
       alert_thresholds: original.alert_thresholds || [50, 75, 90, 100]
@@ -1814,9 +1815,9 @@ export default function ProjectManager({
                 ) : (
                   <div className="grid grid-cols-2 gap-3 p-3 bg-zinc-50/50 dark:bg-[#252525]/30 rounded-xl border border-zinc-100 dark:border-[#2F2F2F] my-3">
                     <div className="space-y-0.5">
-                      <p className="text-[9px] uppercase tracking-wider font-mono text-zinc-400 dark:text-gray-500">Rate</p>
+                      <p className="text-[9px] uppercase tracking-wider font-mono text-zinc-400 dark:text-gray-500">Day Rate</p>
                       <p className="text-xs font-bold font-mono text-zinc-950 dark:text-white">
-                        {project.dayRate ? `£${project.dayRate}/day (${project.hoursInDay}h)` : `£${rateVal}/hr`}
+                        £{project.dayRate ?? (project.rate ? Math.round(project.rate * (project.hoursInDay ?? 8)) : 0)}/day
                       </p>
                     </div>
                     <div className="space-y-0.5">
@@ -1852,10 +1853,10 @@ export default function ProjectManager({
                   <div className="grid grid-cols-2 gap-2 pt-1">
                     <div className="flex items-center space-x-1 text-[10px] text-zinc-400 font-mono">
                       <Calendar className="w-3 h-3 shrink-0" />
-                      <span className="truncate">Start: {project.startDate}</span>
+                      <span className="truncate">Start: {formatDateDMY(project.startDate)}</span>
                     </div>
                     <div className="flex items-center space-x-1 text-[10px] text-zinc-400 font-mono justify-end">
-                      <span className="truncate">Deadline: {project.endDate}</span>
+                      <span className="truncate">Deadline: {formatDateDMY(project.endDate)}</span>
                     </div>
                   </div>
 
