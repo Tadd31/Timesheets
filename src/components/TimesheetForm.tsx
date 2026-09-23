@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Project, TimeEntry, Tag } from '../types';
-import { HelpCircle, Clock, Calendar, Folder, Check, AlertCircle, Coffee, ClipboardCheck, ShieldCheck, X, Plus, Info } from 'lucide-react';
+import { HelpCircle, Clock, Calendar, Folder, Check, AlertCircle, Coffee, ClipboardCheck, ShieldCheck, X, Plus, Info, Lock, Database } from 'lucide-react';
 import { fetchTagsEndpoint, findOrCreateTagEndpoint, deleteTagEndpoint, updateTagEndpoint } from '../utils/api';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -14,9 +14,12 @@ interface TimesheetFormProps {
   onAddEntry: (entry: Omit<TimeEntry, 'id' | 'createdAt'>) => void;
   selectedDate: string;
   setSelectedDate: (date: string) => void;
+  isConnected?: boolean;
+  isReauthNeeded?: boolean;
+  onConnectDatabase?: () => void;
 }
 
-export default function TimesheetForm({ projects, onAddEntry, selectedDate, setSelectedDate }: TimesheetFormProps) {
+export default function TimesheetForm({ projects, onAddEntry, selectedDate, setSelectedDate, isConnected = true, isReauthNeeded = false, onConnectDatabase }: TimesheetFormProps) {
   const [projectId, setProjectId] = useState(projects[0]?.id || '');
   const [hours, setHours] = useState(''); // Initialized to empty as requested
   const [coffees, setCoffees] = useState('');
@@ -44,11 +47,15 @@ export default function TimesheetForm({ projects, onAddEntry, selectedDate, setS
   const [tagToDelete, setTagToDelete] = useState<Tag | null>(null);
 
   // If projectId is empty but we have projects, auto-select the first one
+  const activeProjects = useMemo(() => {
+    return projects.filter(p => p.status !== 'done');
+  }, [projects]);
+
   useEffect(() => {
-    if (!projectId && projects.length > 0) {
-      setProjectId(projects[0].id);
+    if ((!projectId || !activeProjects.some(p => p.id === projectId)) && activeProjects.length > 0) {
+      setProjectId(activeProjects[0].id);
     }
-  }, [projects, projectId]);
+  }, [activeProjects, projectId]);
 
   // Load global tags on mount
   useEffect(() => {
@@ -168,6 +175,15 @@ export default function TimesheetForm({ projects, onAddEntry, selectedDate, setS
     setError('');
     setSuccess(false);
 
+    if (!isConnected) {
+      if (isReauthNeeded) {
+        setError('Authentication expired. Please re-authenticate your Google account to sync and record hours.');
+      } else {
+        setError('Active Google Sheets database connection is required before logging hours. Please connect your database above.');
+      }
+      return;
+    }
+
     // Mandatory fields checks
     if (!projectId) {
       setError('Project selection is mandatory.');
@@ -249,6 +265,50 @@ export default function TimesheetForm({ projects, onAddEntry, selectedDate, setS
         </div>
       ) : (
         <form onSubmit={handleSubmit} className="space-y-4">
+          {!isConnected ? (
+            <div className={`p-3.5 rounded-xl border font-mono text-xs space-y-2 ${
+              isReauthNeeded
+                ? 'border-rose-300 dark:border-rose-900/60 bg-rose-50/90 dark:bg-rose-950/30 text-rose-950 dark:text-rose-200'
+                : 'border-amber-200 dark:border-amber-900/40 bg-amber-50/80 dark:bg-amber-950/20 text-amber-900 dark:text-amber-200'
+            }`}>
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div className="flex items-center space-x-2">
+                  <Lock className={`w-4 h-4 shrink-0 ${isReauthNeeded ? 'text-rose-600 dark:text-rose-400' : 'text-amber-600 dark:text-amber-400'}`} />
+                  <span className="font-bold text-xs uppercase tracking-wide">
+                    {isReauthNeeded ? 'Action Required: Google Re-Authentication Needed' : 'Database Connection Required'}
+                  </span>
+                </div>
+                {onConnectDatabase && (
+                  <button
+                    type="button"
+                    onClick={onConnectDatabase}
+                    className={`px-3 py-1.5 text-xs font-bold font-mono rounded-lg text-white shadow-sm transition-all cursor-pointer flex items-center space-x-1.5 ${
+                      isReauthNeeded
+                        ? 'bg-rose-600 hover:bg-rose-700 active:scale-95'
+                        : 'bg-amber-600 hover:bg-amber-700 active:scale-95'
+                    }`}
+                  >
+                    <Database className="w-3.5 h-3.5" />
+                    <span>{isReauthNeeded ? 'Reconnect Google Account (1-Click)' : 'Connect Google Sheets'}</span>
+                  </button>
+                )}
+              </div>
+              <p className={`text-[11px] leading-relaxed ${isReauthNeeded ? 'text-rose-900/90 dark:text-rose-300' : 'text-amber-800 dark:text-amber-300'}`}>
+                {isReauthNeeded
+                  ? 'Your Google authorization session has expired. Click "Reconnect Google Account" above to authenticate again. Your uncommitted entries remain safe in local browser memory.'
+                  : 'To guarantee team synchronization and prevent data loss, an active Google Sheets database connection is required before logging hours.'}
+              </p>
+            </div>
+          ) : (
+            <div className="p-2.5 rounded-xl border border-emerald-200/80 dark:border-emerald-900/40 bg-emerald-50/50 dark:bg-emerald-950/20 text-emerald-900 dark:text-emerald-200 font-mono text-[11px] flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+                <span className="font-bold">Google Sheets Database Connected & Active</span>
+              </div>
+              <span className="text-[10px] text-emerald-700 dark:text-emerald-400 font-normal hidden sm:inline">Real-time team sync enabled</span>
+            </div>
+          )}
+
           {error && (
             <div className="p-3 text-xs bg-rose-50 dark:bg-rose-950/20 border border-rose-100 dark:border-rose-900/35 text-rose-600 dark:text-rose-400 rounded-lg flex items-start space-x-2">
               <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
@@ -276,11 +336,15 @@ export default function TimesheetForm({ projects, onAddEntry, selectedDate, setS
                 onChange={e => setProjectId(e.target.value)}
                 className="w-full text-xs font-mono py-2 px-2.5 rounded-lg border border-zinc-200 dark:border-[#2F2F2F] bg-white dark:bg-[#191919] text-zinc-800 dark:text-[#E0E0E0] focus:outline-none focus:ring-1 focus:ring-blue-500 dark:focus:ring-blue-500"
               >
-                {projects.map(p => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
+                {activeProjects.length === 0 ? (
+                  <option value="">-- No Active Projects --</option>
+                ) : (
+                  activeProjects.map(p => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))
+                )}
               </select>
             </div>
 

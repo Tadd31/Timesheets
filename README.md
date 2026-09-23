@@ -2,7 +2,7 @@
 
 A modern, offline-first timesheet and project tracking application built with React, TypeScript, and Tailwind CSS. Designed with a clean, Notion-inspired aesthetic, **Timesheet Recorder** features real-time Google Sheets synchronization, project budget monitoring, agency directory management, caffeine counters, and printable executive weekly reports.
 
-![License](https://img.shields.io/badge/license-MIT-blue.svg)
+![License](https://img.shields.io/badge/license-Apache_2.0-blue.svg)
 ![React](https://img.shields.io/badge/React-19-61dafb.svg)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.8-3178c6.svg)
 ![TailwindCSS](https://img.shields.io/badge/Tailwind_CSS-v4-38bdf8.svg)
@@ -22,39 +22,75 @@ A modern, offline-first timesheet and project tracking application built with Re
 
 ---
 
-## 🚀 Tech Stack
+## 🏗️ Architecture & Code Base Structure
 
-- **Frontend**: [React 19](https://react.dev/), [TypeScript](https://www.typescriptlang.org/)
-- **Build Tool**: [Vite 6](https://vitejs.dev/)
-- **Styling**: [Tailwind CSS v4](https://tailwindcss.com/)
-- **Icons**: [Lucide React](https://lucide.dev/)
-- **Charts**: [Recharts](https://recharts.org/)
-- **Animations**: [Motion](https://motion.dev/)
-- **APIs**: Google Sheets API v4, Google OAuth 2.0, Firebase Auth
+### System Architecture
 
----
+`Timesheet Recorder` is designed with an **Offline-First, Cloud-Synced** architecture. All state reads and writes occur immediately in client memory and `localStorage`, ensuring zero latency and instant UI feedback regardless of network speed. An asynchronous Google Sheets sync engine handles cloud persistence and multi-user team collaboration in the background.
 
-## 📂 Project Structure
+```text
+┌─────────────────────────────────────────────────────────────────────────┐
+│                           REACT UI LAYER                                │
+│ (Dashboard, Project Manager, Timesheet Logger, Weekly Audit Reports)    │
+└────────────────────┬───────────────────────────────┬────────────────────┘
+                     │                               │
+        Immediate    │                               │  Async Auto-Sync
+       State Updates │                               │  & Polling (30s)
+                     ▼                               ▼
+┌───────────────────────────┐           ┌─────────────────────────────────┐
+│     LOCAL STORAGE ENGINE  │           │   GOOGLE SHEETS SYNC ENGINE     │
+│  - Multi-Key Migration    │           │ - In-Memory Session Caching     │
+│  - Fail-Safe Fallback     │           │ - Deterministic Data Merging    │
+│  - Instant Offline Access │           │ - Batch Sheet Clear & Updates   │
+└───────────────────────────┘           └─────────────────────────────────┘
+```
+
+### Key Modules & Directory Layout
 
 ```text
 ├── src/
-│   ├── components/
-│   │   ├── AgencyDirectoryModal.tsx  # Agency management modal
-│   │   ├── BudgetAlertsModal.tsx     # Budget thresholds & alert configuration
-│   │   ├── ProjectModal.tsx          # Project create & edit form
-│   │   ├── ProjectStatsModal.tsx     # Analytics & burn-rate charts
-│   │   ├── QuickAddModal.tsx         # Fast timesheet entry logger
-│   │   └── WeeklyReport.tsx          # Executive weekly report & print view
-│   ├── utils/
-│   │   ├── googleAuth.ts             # Google OAuth & Sheets API sync logic
-│   │   └── storage.ts                # Offline localStorage engine & migration
-│   ├── App.tsx                       # Main application state & dashboard
-│   ├── main.tsx                      # Entry point
-│   ├── types.ts                      # Shared TypeScript interfaces & models
-│   └── index.css                     # Global styles & print utilities
+│   ├── components/                     # Modular presentation & interactive components
+│   │   ├── AgencyDirectoryModal.tsx    # Registered agency modal & form manager
+│   │   ├── BudgetAlertsModal.tsx       # Threshold alert setup & notification list
+│   │   ├── HumorBanner.tsx             # Sarcastic corporate humor banner
+│   │   ├── ProjectManager.tsx          # Project listing, budget burn-rate & edit drawers
+│   │   ├── ProjectModal.tsx            # Project creation/editing modal
+│   │   ├── ProjectStatsModal.tsx       # Recharts analytics & time distribution charts
+│   │   ├── QuickAddModal.tsx           # Rapid timesheet logger with auto-suggestions
+│   │   ├── TimesheetForm.tsx           # Daily time entry form with caffeine tracker
+│   │   ├── TimesheetList.tsx           # Grouped timesheet history & inline editing
+│   │   └── WeeklyReport.tsx            # Executive weekly report & print stylesheet
+│   │
+│   ├── utils/                          # Core service layers & helper functions
+│   │   ├── api.ts                      # Idempotent tag endpoint simulator
+│   │   ├── formatters.ts               # Currency, duration, and date formatting utilities
+│   │   ├── googleAuth.ts               # Firebase Auth & Google Sheets API v4 connector
+│   │   ├── humor.ts                    # Dynamic corporate humor generator
+│   │   ├── storage.ts                  # LocalStorage engine with multi-version key migration
+│   │   └── syncUtils.ts                # Deterministic dataset merging & deep-diff comparison
+│   │
+│   ├── App.tsx                         # Main application state orchestrator & lifecycle
+│   ├── main.tsx                        # React DOM entry point
+│   ├── types.ts                        # Strict TypeScript models & interface declarations
+│   └── index.css                       # Global Tailwind CSS v4 styling & print utilities
 ├── package.json
 └── README.md
 ```
+
+### Engineering & Performance Optimizations
+
+1. **In-Memory Spreadsheet Verification Cache (`googleAuth.ts`)**:
+   - Tab verification (`ensureAgenciesSheet`) uses a session-level `Set<string>` cache to avoid unnecessary Google API GET requests prior to every sync or background poll cycle.
+
+2. **Deterministic Data Merging & Diffing (`syncUtils.ts`)**:
+   - Merging logic for Projects, Entries, and Agencies is centralized in a pure helper function (`mergeSheetAndLocalData`).
+   - Deep equality checking (`isDataEqual`) compares updated datasets against existing state before triggering React state setters, eliminating redundant component re-renders during 30-second silent background polling.
+
+3. **Multi-Key Backward Compatibility (`storage.ts`)**:
+   - `loadFromCandidateKeys` automatically checks legacy storage keys across previous app versions, seamlessly migrating data to primary keys without user intervention or loss.
+
+4. **Print-Optimized Media Styles (`index.css`)**:
+   - Custom `@media print` CSS rules isolate and format weekly executive reports for clean A4/Letter PDF exports or physical printing without navigation clutter.
 
 ---
 

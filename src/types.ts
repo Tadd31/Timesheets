@@ -20,6 +20,7 @@ export interface Project {
   budget_hours?: number | null; // Nullable float
   alert_thresholds?: number[]; // Array of percentages
   createdBy?: string; // Name of creator
+  status?: 'active' | 'done';
 }
 
 export interface Agency {

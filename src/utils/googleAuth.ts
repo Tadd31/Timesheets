@@ -27,6 +27,7 @@ provider.addScope('https://www.googleapis.com/auth/drive.file');
 
 let isSigningIn = false;
 let cachedAccessToken: string | null = null;
+const verifiedAgenciesSheets = new Set<string>();
 
 export const initAuth = (
   onAuthSuccess?: (user: User, token: string) => void,
@@ -145,6 +146,9 @@ export async function findSpreadsheet(accessToken: string): Promise<string | nul
 }
 
 export async function ensureAgenciesSheet(accessToken: string, spreadsheetId: string): Promise<void> {
+  if (verifiedAgenciesSheets.has(spreadsheetId)) {
+    return;
+  }
   try {
     const res = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}?fields=sheets.properties.title`, {
       headers: { Authorization: `Bearer ${accessToken}` }
@@ -168,6 +172,7 @@ export async function ensureAgenciesSheet(accessToken: string, spreadsheetId: st
           })
         });
       }
+      verifiedAgenciesSheets.add(spreadsheetId);
     }
   } catch (e) {
     console.warn('Failed to ensure Registered Agencies sheet tab:', e);
@@ -231,8 +236,8 @@ export async function writeHeaders(accessToken: string, spreadsheetId: string): 
       valueInputOption: 'USER_ENTERED',
       data: [
         {
-          range: 'Projects!A1:O1',
-          values: [['ID', 'Name', 'Agency Name', 'Brand Name', 'Rate ($)', 'Estimated Hours', 'Budget Hours', 'Start Date', 'End Date', 'Is Non-Billable', 'Created By', 'Created At', 'Description', 'Day Rate', 'Hours in Day']]
+          range: 'Projects!A1:P1',
+          values: [['ID', 'Name', 'Agency Name', 'Brand Name', 'Rate ($)', 'Estimated Hours', 'Budget Hours', 'Start Date', 'End Date', 'Is Non-Billable', 'Created By', 'Created At', 'Description', 'Day Rate', 'Hours in Day', 'Status']]
         },
         {
           range: 'Timesheet Entries!A1:K1',
@@ -269,7 +274,7 @@ export async function syncDataToSheet(
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      ranges: ['Projects!A2:O10000', 'Timesheet Entries!A2:K10000', 'Registered Agencies!A2:G10000']
+      ranges: ['Projects!A2:P10000', 'Timesheet Entries!A2:K10000', 'Registered Agencies!A2:G10000']
     })
   });
   if (!clearRes.ok) {
@@ -295,7 +300,8 @@ export async function syncDataToSheet(
     p.createdAt || "",
     p.description || "",
     p.dayRate !== undefined && p.dayRate !== null ? p.dayRate : "",
-    p.hoursInDay !== undefined && p.hoursInDay !== null ? p.hoursInDay : ""
+    p.hoursInDay !== undefined && p.hoursInDay !== null ? p.hoursInDay : "",
+    p.status || "active"
   ]);
 
   const entryRows = entries.map(e => {
@@ -328,13 +334,13 @@ export async function syncDataToSheet(
   const data: any[] = [];
   if (projectRows.length > 0) {
     data.push({
-      range: `Projects!A2:O${projectRows.length + 1}`,
+      range: `Projects!A2:P${projectRows.length + 1}`,
       values: projectRows
     });
   } else {
     data.push({
-      range: `Projects!A2:O2`,
-      values: [["", "", "", "", "", "", "", "", "", "", "", "", "", "", ""]]
+      range: `Projects!A2:P2`,
+      values: [["", "", "", "", "", "", "", "", "", "", "", "", "", "", "", ""]]
     });
   }
   if (entryRows.length > 0) {
@@ -383,7 +389,7 @@ export async function loadDataFromSheet(
   spreadsheetId: string
 ): Promise<{ projects: Project[]; entries: TimeEntry[]; agencies: Agency[] }> {
   await ensureAgenciesSheet(accessToken, spreadsheetId);
-  const url = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values:batchGet?ranges=Projects!A2:O10000&ranges=Timesheet%20Entries!A2:K10000&ranges=Registered%20Agencies!A2:G10000`;
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values:batchGet?ranges=Projects!A2:P10000&ranges=Timesheet%20Entries!A2:K10000&ranges=Registered%20Agencies!A2:G10000`;
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
@@ -416,6 +422,7 @@ export async function loadDataFromSheet(
       description: row[12] || undefined,
       dayRate: row[13] !== undefined && row[13] !== "" ? Number(row[13]) : undefined,
       hoursInDay: row[14] !== undefined && row[14] !== "" ? Number(row[14]) : undefined,
+      status: row[15] === "done" ? "done" : "active",
     };
   }).filter((p: any): p is Project => p !== null);
 

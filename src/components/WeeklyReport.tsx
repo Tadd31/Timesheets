@@ -5,7 +5,7 @@
 
 import React, { useState, useMemo } from 'react';
 import { Project, TimeEntry } from '../types';
-import { Download, Printer, Calendar, Clock, Sparkles, TrendingUp, HelpCircle, FileText, CheckCircle, Coffee, AlertCircle } from 'lucide-react';
+import { Download, Printer, Calendar, Clock, Sparkles, TrendingUp, HelpCircle, FileText, CheckCircle, Coffee, AlertCircle, FolderOpen } from 'lucide-react';
 import { formatDateDMY } from '../utils/formatters';
 
 interface WeeklyReportProps {
@@ -22,8 +22,18 @@ interface PeriodBreakdownItem {
 }
 
 export default function WeeklyReport({ entries, projects }: WeeklyReportProps) {
-  const [viewMode, setViewMode] = useState<'weekly' | 'monthly'>('weekly');
+  const [viewMode, setViewMode] = useState<'weekly' | 'monthly' | 'project_duration' | 'custom'>('weekly');
   const [errorNotification, setErrorNotification] = useState<string | null>(null);
+
+  // Filter states
+  const [selectedFilterProjectId, setSelectedFilterProjectId] = useState<string>('all');
+  const [selectedProjectForDuration, setSelectedProjectForDuration] = useState<string>('all');
+  const [customStartDate, setCustomStartDate] = useState<string>(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 30);
+    return d.toISOString().split('T')[0];
+  });
+  const [customEndDate, setCustomEndDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
   
   const [selectedWeekStart, setSelectedWeekStart] = useState<string>(() => {
     const today = new Date();
@@ -86,30 +96,53 @@ export default function WeeklyReport({ entries, projects }: WeeklyReportProps) {
     return start.toISOString().split('T')[0];
   }, [selectedWeekStart]);
 
-  // Filter entries that fall within the selected week (Monday to Sunday) - lexicographical string comparison is timezone safe!
-  const weekEntries = useMemo(() => {
-    return entries.filter(e => {
-      if (!e.date) return false;
-      return e.date >= selectedWeekStart && e.date <= selectedWeekEnd;
-    });
-  }, [entries, selectedWeekStart, selectedWeekEnd]);
-
-  // Filter entries that fall within the selected month - string split comparison is timezone safe!
-  const monthEntries = useMemo(() => {
-    const [yearStr, monthStr] = selectedMonth.split('-');
-    return entries.filter(e => {
-      if (!e.date) return false;
-      const [entryYear, entryMonth] = e.date.split('-');
-      return entryYear === yearStr && entryMonth === monthStr;
-    });
-  }, [entries, selectedMonth]);
-
-  // Combined active entries based on selected mode
+  // Combined active entries based on selected mode & project filter
   const activeEntries = useMemo(() => {
-    return viewMode === 'weekly' ? weekEntries : monthEntries;
-  }, [viewMode, weekEntries, monthEntries]);
+    let filtered: TimeEntry[] = [];
 
-  // Calculate day-by-day/week-by-week totals for the bar chart
+    if (viewMode === 'weekly') {
+      filtered = entries.filter(e => e.date && e.date >= selectedWeekStart && e.date <= selectedWeekEnd);
+    } else if (viewMode === 'monthly') {
+      const [yearStr, monthStr] = selectedMonth.split('-');
+      filtered = entries.filter(e => {
+        if (!e.date) return false;
+        const [entryYear, entryMonth] = e.date.split('-');
+        return entryYear === yearStr && entryMonth === monthStr;
+      });
+    } else if (viewMode === 'project_duration') {
+      if (selectedProjectForDuration !== 'all') {
+        const proj = projects.find(p => p.id === selectedProjectForDuration);
+        if (proj) {
+          filtered = entries.filter(e => e.projectId === proj.id && e.date >= proj.startDate && e.date <= proj.endDate);
+        } else {
+          filtered = entries;
+        }
+      } else {
+        filtered = entries;
+      }
+    } else if (viewMode === 'custom') {
+      filtered = entries.filter(e => e.date && e.date >= customStartDate && e.date <= customEndDate);
+    }
+
+    if (selectedFilterProjectId !== 'all') {
+      filtered = filtered.filter(e => e.projectId === selectedFilterProjectId);
+    }
+
+    return filtered;
+  }, [
+    entries,
+    projects,
+    viewMode,
+    selectedWeekStart,
+    selectedWeekEnd,
+    selectedMonth,
+    selectedProjectForDuration,
+    customStartDate,
+    customEndDate,
+    selectedFilterProjectId
+  ]);
+
+  // Calculate breakdown items for the chart/ledger based on active mode
   const periodBreakdown = useMemo((): PeriodBreakdownItem[] => {
     if (viewMode === 'weekly') {
       const dayNames = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
@@ -120,7 +153,7 @@ export default function WeeklyReport({ entries, projects }: WeeklyReportProps) {
         currentDay.setUTCDate(currentDay.getUTCDate() + i);
         const dateStr = currentDay.toISOString().split('T')[0];
 
-        const dayEntries = weekEntries.filter(e => e.date === dateStr);
+        const dayEntries = activeEntries.filter(e => e.date === dateStr);
         const hours = dayEntries.reduce((sum, e) => sum + e.hours, 0);
         const comments = dayEntries.map(e => e.comment);
 
@@ -133,13 +166,12 @@ export default function WeeklyReport({ entries, projects }: WeeklyReportProps) {
         });
       }
       return list;
-    } else {
+    } else if (viewMode === 'monthly') {
       // Monthly View: Group by 5 weeks of the month
       const [yearStr, monthStr] = selectedMonth.split('-');
       const year = parseInt(yearStr, 10);
       const monthIndex = parseInt(monthStr, 10) - 1;
       
-      // Get total days in the selected month
       const totalDays = new Date(year, monthIndex + 1, 0).getDate();
 
       const weeks = [
@@ -151,7 +183,7 @@ export default function WeeklyReport({ entries, projects }: WeeklyReportProps) {
       ];
 
       return weeks.map(w => {
-        const weeklyItems = monthEntries.filter(e => {
+        const weeklyItems = activeEntries.filter(e => {
           if (!e.date) return false;
           const day = parseInt(e.date.split('-')[2], 10);
           return day >= w.start && day <= w.end;
@@ -169,8 +201,43 @@ export default function WeeklyReport({ entries, projects }: WeeklyReportProps) {
           status: hours === 0 ? 'Quiet Week' : hours > 40 ? 'Heavy Sprint' : 'Nominal progress'
         };
       });
+    } else {
+      // Group activeEntries by project for Project Duration & Custom Range Audits
+      const projectMap: Record<string, { name: string; hours: number; comments: string[] }> = {};
+      activeEntries.forEach(e => {
+        const proj = projects.find(p => p.id === e.projectId);
+        const pName = proj ? proj.name : 'Unlisted Sub-task';
+        if (!projectMap[e.projectId]) {
+          projectMap[e.projectId] = { name: pName, hours: 0, comments: [] };
+        }
+        projectMap[e.projectId].hours += e.hours;
+        if (e.comment) projectMap[e.projectId].comments.push(e.comment);
+      });
+
+      const items = Object.keys(projectMap).map(pId => {
+        const item = projectMap[pId];
+        return {
+          label: item.name.length > 20 ? item.name.slice(0, 18) + '...' : item.name,
+          subLabel: `${item.hours}h logged`,
+          hours: item.hours,
+          comments: item.comments,
+          status: item.hours === 0 ? 'Zero Effort' : item.hours > 50 ? 'Major Sprint' : 'Active Scope'
+        };
+      });
+
+      if (items.length === 0) {
+        return [{
+          label: 'No Activity',
+          subLabel: '0h logged',
+          hours: 0,
+          comments: [],
+          status: 'Quiet Period'
+        }];
+      }
+
+      return items;
     }
-  }, [viewMode, weekEntries, monthEntries, selectedWeekStart, selectedMonth]);
+  }, [viewMode, activeEntries, selectedWeekStart, selectedMonth, projects]);
 
   // Total active period hours logged
   const totalWeeklyHours = useMemo(() => {
@@ -400,10 +467,10 @@ export default function WeeklyReport({ entries, projects }: WeeklyReportProps) {
       )}
 
       {/* Selection Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 p-4 rounded-xl border border-zinc-200 dark:border-[#2F2F2F] bg-white dark:bg-[#1F1F1F] shadow-sm print:hidden">
-        <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+      <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4 p-4 rounded-xl border border-zinc-200 dark:border-[#2F2F2F] bg-white dark:bg-[#1F1F1F] shadow-sm print:hidden">
+        <div className="flex flex-col lg:flex-row lg:items-center gap-4 flex-wrap">
           {/* Segmented View Mode Toggle */}
-          <div className="flex rounded-lg border border-zinc-200 dark:border-[#2F2F2F] p-0.5 bg-zinc-50 dark:bg-[#191919] text-xs font-mono shrink-0">
+          <div className="flex flex-wrap rounded-lg border border-zinc-200 dark:border-[#2F2F2F] p-0.5 bg-zinc-50 dark:bg-[#191919] text-xs font-mono shrink-0">
             <button
               onClick={() => setViewMode('weekly')}
               className={`px-3 py-1.5 rounded-md transition-all cursor-pointer ${
@@ -424,38 +491,122 @@ export default function WeeklyReport({ entries, projects }: WeeklyReportProps) {
             >
               Monthly View
             </button>
+            <button
+              onClick={() => setViewMode('project_duration')}
+              className={`px-3 py-1.5 rounded-md transition-all cursor-pointer ${
+                viewMode === 'project_duration'
+                  ? 'bg-white dark:bg-[#2F2F2F] text-zinc-900 dark:text-white font-bold shadow-sm'
+                  : 'text-zinc-450 hover:text-zinc-700 dark:hover:text-zinc-300'
+              }`}
+            >
+              Project Duration
+            </button>
+            <button
+              onClick={() => setViewMode('custom')}
+              className={`px-3 py-1.5 rounded-md transition-all cursor-pointer ${
+                viewMode === 'custom'
+                  ? 'bg-white dark:bg-[#2F2F2F] text-zinc-900 dark:text-white font-bold shadow-sm'
+                  : 'text-zinc-450 hover:text-zinc-700 dark:hover:text-zinc-300'
+              }`}
+            >
+              Custom Range
+            </button>
           </div>
 
-          <div className="space-y-1">
-            <label className="text-[10px] uppercase tracking-wider font-mono font-bold text-zinc-400 dark:text-gray-500 flex items-center space-x-1">
-              <Calendar className="w-3 h-3 text-zinc-400" />
-              <span>{viewMode === 'weekly' ? 'Select Weekly Billing Period' : 'Select Month'}</span>
-            </label>
-            {viewMode === 'weekly' ? (
+          {/* Dynamic Date Controls */}
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="space-y-1">
+              <label className="text-[10px] uppercase tracking-wider font-mono font-bold text-zinc-400 dark:text-gray-500 flex items-center space-x-1">
+                <Calendar className="w-3 h-3 text-zinc-400" />
+                <span>
+                  {viewMode === 'weekly' && 'Select Week'}
+                  {viewMode === 'monthly' && 'Select Month'}
+                  {viewMode === 'project_duration' && 'Target Project Scope'}
+                  {viewMode === 'custom' && 'Audit Range'}
+                </span>
+              </label>
+
+              {viewMode === 'weekly' && (
+                <select
+                  value={selectedWeekStart}
+                  onChange={e => setSelectedWeekStart(e.target.value)}
+                  className="text-xs font-mono py-1.5 px-3 rounded-lg border border-zinc-200 dark:border-[#2F2F2F] bg-zinc-50 dark:bg-[#191919] text-zinc-800 dark:text-zinc-100 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                >
+                  {weeksList.map(week => (
+                    <option key={week.value} value={week.value}>
+                      {week.label}
+                    </option>
+                  ))}
+                </select>
+              )}
+
+              {viewMode === 'monthly' && (
+                <select
+                  value={selectedMonth}
+                  onChange={e => setSelectedMonth(e.target.value)}
+                  className="text-xs font-mono py-1.5 px-3 rounded-lg border border-zinc-200 dark:border-[#2F2F2F] bg-zinc-50 dark:bg-[#191919] text-zinc-800 dark:text-zinc-100 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                >
+                  {monthsList.map(m => (
+                    <option key={m.value} value={m.value}>
+                      {m.label}
+                    </option>
+                  ))}
+                </select>
+              )}
+
+              {viewMode === 'project_duration' && (
+                <select
+                  value={selectedProjectForDuration}
+                  onChange={e => setSelectedProjectForDuration(e.target.value)}
+                  className="text-xs font-mono py-1.5 px-3 rounded-lg border border-zinc-200 dark:border-[#2F2F2F] bg-zinc-50 dark:bg-[#191919] text-zinc-800 dark:text-zinc-100 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                >
+                  <option value="all">All Lifetime Projects</option>
+                  {projects.map(p => (
+                    <option key={p.id} value={p.id}>
+                      {p.status === 'done' ? '🏁 [Done] ' : ''}{p.name} ({p.startDate} to {p.endDate})
+                    </option>
+                  ))}
+                </select>
+              )}
+
+              {viewMode === 'custom' && (
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="date"
+                    value={customStartDate}
+                    onChange={e => setCustomStartDate(e.target.value)}
+                    className="text-xs font-mono py-1.5 px-2.5 rounded-lg border border-zinc-200 dark:border-[#2F2F2F] bg-zinc-50 dark:bg-[#191919] text-zinc-800 dark:text-zinc-100"
+                  />
+                  <span className="text-xs font-mono text-zinc-400">to</span>
+                  <input
+                    type="date"
+                    value={customEndDate}
+                    onChange={e => setCustomEndDate(e.target.value)}
+                    className="text-xs font-mono py-1.5 px-2.5 rounded-lg border border-zinc-200 dark:border-[#2F2F2F] bg-zinc-50 dark:bg-[#191919] text-zinc-800 dark:text-zinc-100"
+                  />
+                </div>
+              )}
+            </div>
+
+            {/* Project Filter */}
+            <div className="space-y-1">
+              <label className="text-[10px] uppercase tracking-wider font-mono font-bold text-zinc-400 dark:text-gray-500 flex items-center space-x-1">
+                <FolderOpen className="w-3 h-3 text-zinc-400" />
+                <span>Filter Project</span>
+              </label>
               <select
-                value={selectedWeekStart}
-                onChange={e => setSelectedWeekStart(e.target.value)}
+                value={selectedFilterProjectId}
+                onChange={e => setSelectedFilterProjectId(e.target.value)}
                 className="text-xs font-mono py-1.5 px-3 rounded-lg border border-zinc-200 dark:border-[#2F2F2F] bg-zinc-50 dark:bg-[#191919] text-zinc-800 dark:text-zinc-100 focus:outline-none focus:ring-1 focus:ring-blue-500"
               >
-                {weeksList.map(week => (
-                  <option key={week.value} value={week.value}>
-                    {week.label}
+                <option value="all">All Projects (Active & Done)</option>
+                {projects.map(p => (
+                  <option key={p.id} value={p.id}>
+                    {p.status === 'done' ? '🏁 [Done] ' : ''}{p.name}
                   </option>
                 ))}
               </select>
-            ) : (
-              <select
-                value={selectedMonth}
-                onChange={e => setSelectedMonth(e.target.value)}
-                className="text-xs font-mono py-1.5 px-3 rounded-lg border border-zinc-200 dark:border-[#2F2F2F] bg-zinc-50 dark:bg-[#191919] text-zinc-800 dark:text-zinc-100 focus:outline-none focus:ring-1 focus:ring-blue-500"
-              >
-                {monthsList.map(m => (
-                  <option key={m.value} value={m.value}>
-                    {m.label}
-                  </option>
-                ))}
-              </select>
-            )}
+            </div>
           </div>
         </div>
 
@@ -489,13 +640,23 @@ export default function WeeklyReport({ entries, projects }: WeeklyReportProps) {
           <div className="space-y-1.5">
             <span className="text-[10px] uppercase font-mono tracking-widest text-zinc-400 dark:text-zinc-500">Corporate Effort Dispatch</span>
             <h1 className="text-xl sm:text-2xl font-bold text-zinc-950 dark:text-white font-mono tracking-tight">
-              {viewMode === 'weekly' ? 'Weekly Timesheet Report Card' : 'Monthly Timesheet Report Card'}
+              {viewMode === 'weekly' && 'Weekly Timesheet Report Card'}
+              {viewMode === 'monthly' && 'Monthly Timesheet Report Card'}
+              {viewMode === 'project_duration' && 'Project Duration Audit Report'}
+              {viewMode === 'custom' && 'Custom Date Range Audit Report'}
             </h1>
             <p className="text-xs text-zinc-500 dark:text-gray-400 font-mono flex items-center space-x-1.5">
-              {viewMode === 'weekly' ? (
+              {viewMode === 'weekly' && (
                 <span>Period: <strong>{formatDateDMY(selectedWeekStart)}</strong> to <strong>{formatDateDMY(selectedWeekEnd)}</strong></span>
-              ) : (
+              )}
+              {viewMode === 'monthly' && (
                 <span>Month: <strong>{monthsList.find(m => m.value === selectedMonth)?.label || selectedMonth}</strong></span>
+              )}
+              {viewMode === 'project_duration' && (
+                <span>Scope: <strong>{selectedProjectForDuration === 'all' ? 'All Lifetime Projects' : (projects.find(p => p.id === selectedProjectForDuration)?.name || 'Project Scope')}</strong></span>
+              )}
+              {viewMode === 'custom' && (
+                <span>Range: <strong>{formatDateDMY(customStartDate)}</strong> to <strong>{formatDateDMY(customEndDate)}</strong></span>
               )}
             </p>
           </div>

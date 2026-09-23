@@ -5,7 +5,7 @@
 
 import React, { useState, useMemo } from 'react';
 import { Project, TimeEntry, Agency } from '../types';
-import { Calendar, Plus, Trash2, Clock, CheckCircle2, ChevronRight, AlertTriangle, Info, Coffee, Pencil, BarChart3, TrendingDown, ChevronDown, ChevronUp, X, AlertOctagon, Building2, Globe, Mail, Link } from 'lucide-react';
+import { Calendar, Plus, Trash2, Clock, CheckCircle2, ChevronRight, AlertTriangle, Info, Coffee, Pencil, BarChart3, TrendingDown, ChevronDown, ChevronUp, X, AlertOctagon, Building2, Globe, Mail, Link, RotateCcw } from 'lucide-react';
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine } from 'recharts';
 import { motion, AnimatePresence } from 'motion/react';
 import { formatDateDMY } from '../utils/formatters';
@@ -92,6 +92,8 @@ export default function ProjectManager({
   const [editIsNonBillable, setEditIsNonBillable] = useState(false);
   const [editBudgetHours, setEditBudgetHours] = useState('');
   const [editAlertThresholds, setEditAlertThresholds] = useState('');
+  const [editStatus, setEditStatus] = useState<'active' | 'done'>('active');
+  const [isDoneSectionOpen, setIsDoneSectionOpen] = useState(true);
   const [editError, setEditError] = useState('');
   
   // Interactive expanded agency cards
@@ -122,6 +124,7 @@ export default function ProjectManager({
     setEditIsNonBillable(!!proj.isNonBillable);
     setEditBudgetHours(proj.budget_hours !== undefined && proj.budget_hours !== null ? String(proj.budget_hours) : '');
     setEditAlertThresholds(proj.alert_thresholds ? proj.alert_thresholds.join(', ') : '50, 75, 90, 100');
+    setEditStatus(proj.status === 'done' ? 'done' : 'active');
     setEditError('');
   };
 
@@ -202,10 +205,19 @@ export default function ProjectManager({
       description: editDescription.trim() || original.description || undefined,
       isNonBillable: editIsNonBillable,
       budget_hours: hours,
-      alert_thresholds: original.alert_thresholds || [50, 75, 90, 100]
+      alert_thresholds: original.alert_thresholds || [50, 75, 90, 100],
+      status: editStatus
     });
 
     setEditingProjectId(null);
+  };
+
+  const handleToggleProjectDone = (proj: Project) => {
+    const nextStatus = proj.status === 'done' ? 'active' : 'done';
+    onEditProject({
+      ...proj,
+      status: nextStatus
+    });
   };
 
   // Submit form
@@ -589,7 +601,8 @@ export default function ProjectManager({
     return null;
   };
 
-  const activeProjectsCount = projects.length;
+  const activeProjects = useMemo(() => projects.filter(p => p.status !== 'done'), [projects]);
+  const doneProjects = useMemo(() => projects.filter(p => p.status === 'done'), [projects]);
   const totalEstimatedHours = projects.reduce((sum, p) => sum + p.estimatedHours, 0);
   const totalSpentAll = entries.reduce((sum, e) => sum + e.hours, 0);
 
@@ -601,7 +614,10 @@ export default function ProjectManager({
         <div className="p-4 rounded-xl border border-zinc-200 dark:border-[#2F2F2F] bg-white dark:bg-[#252525] shadow-sm flex items-center justify-between">
           <div className="space-y-0.5">
             <span className="text-[10px] uppercase tracking-wider font-mono text-zinc-500 dark:text-gray-400">Total Projects</span>
-            <p className="text-xl font-bold font-mono text-zinc-900 dark:text-[#E0E0E0]">{activeProjectsCount}</p>
+            <div className="flex items-baseline space-x-1.5">
+              <p className="text-xl font-bold font-mono text-zinc-900 dark:text-[#E0E0E0]">{projects.length}</p>
+              <span className="text-[10px] font-mono text-zinc-400">({activeProjects.length} act • {doneProjects.length} done)</span>
+            </div>
           </div>
           <span className="p-2 rounded-lg bg-zinc-50 dark:bg-[#1F1F1F] text-zinc-500 text-sm">📂</span>
         </div>
@@ -750,7 +766,8 @@ export default function ProjectManager({
               <option value="all">📁 All Projects (Overview)</option>
               {projects.map((p) => (
                 <option key={p.id} value={p.id}>
-                  📄 {p.name.length > 25 ? p.name.slice(0, 25) + '...' : p.name}
+                  {p.status === 'done' ? '🏁 [Done] ' : '📄 '}
+                  {p.name.length > 25 ? p.name.slice(0, 25) + '...' : p.name}
                 </option>
               ))}
             </select>
@@ -1512,365 +1529,544 @@ export default function ProjectManager({
         </form>
       )}
 
-      {/* Project Cards List */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {projects.length === 0 ? (
-          <div className="col-span-full py-12 text-center border-2 border-dashed border-zinc-200 dark:border-[#2F2F2F] rounded-xl">
-            <span className="text-4xl">📂</span>
-            <h3 className="text-sm font-bold font-mono text-zinc-700 dark:text-zinc-300 mt-3">Zero Projects Identified</h3>
-            <p className="text-xs text-zinc-400 dark:text-gray-500 mt-1">No tasks to track. Is this... pure freedom? Highly unlikely. Click "Initiate New Project" to start tracking.</p>
+      {/* Burn-Rate Health Summary Bar */}
+      {projects.length > 0 && (() => {
+        let healthyCount = 0;
+        let warningCount = 0;
+        let criticalCount = 0;
+
+        projects.forEach(p => {
+          const spent = getProjectStats(p.id);
+          const budget = p.budget_hours ?? p.estimatedHours;
+          const pct = budget > 0 ? (spent / budget) * 100 : 0;
+          if (pct > 90) criticalCount++;
+          else if (pct >= 70) warningCount++;
+          else healthyCount++;
+        });
+
+        return (
+          <div className="flex items-center flex-wrap gap-2 text-xs font-mono p-3 rounded-xl border border-zinc-200 dark:border-[#2F2F2F] bg-zinc-50/60 dark:bg-[#1A1A1A]">
+            <span className="font-bold text-zinc-600 dark:text-zinc-400 uppercase tracking-wider text-[10px] mr-1">
+              Burn Health Audit:
+            </span>
+            <span className="px-2.5 py-1 rounded-md bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300 border border-emerald-200/80 dark:border-emerald-800/80 font-bold flex items-center space-x-1.5">
+              <span className="w-2 h-2 rounded-full bg-emerald-500" />
+              <span>{healthyCount} Healthy (&lt;70%)</span>
+            </span>
+            <span className="px-2.5 py-1 rounded-md bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300 border border-amber-200/80 dark:border-amber-800/80 font-bold flex items-center space-x-1.5">
+              <span className="w-2 h-2 rounded-full bg-amber-500" />
+              <span>{warningCount} Warning (70-90%)</span>
+            </span>
+            <span className="px-2.5 py-1 rounded-md bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300 border border-rose-200/80 dark:border-rose-800/80 font-bold flex items-center space-x-1.5">
+              <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse" />
+              <span>{criticalCount} Critical (&gt;90%)</span>
+            </span>
           </div>
-        ) : (
-          projects.map(project => {
-            if (editingProjectId === project.id) {
-              return (
-                <div
-                  key={project.id}
-                  className="flex flex-col justify-between p-5 rounded-xl border border-blue-200 dark:border-blue-900 bg-blue-50/10 dark:bg-blue-950/5 shadow-sm space-y-4 animate-in fade-in duration-200"
-                >
-                  <div className="flex items-center justify-between pb-1.5 border-b border-zinc-200 dark:border-[#2F2F2F]">
-                    <span className="text-xs font-bold font-mono text-blue-600 dark:text-blue-400">Edit Project Parameters</span>
-                    <button
-                      type="button"
-                      onClick={() => setEditingProjectId(null)}
-                      className="text-[10px] text-zinc-400 hover:text-zinc-650 font-mono cursor-pointer"
-                    >
-                      Cancel
-                    </button>
-                  </div>
+        );
+      })()}
 
-                  {editError && (
-                    <p className="text-[10px] font-mono text-rose-500 bg-rose-50 dark:bg-rose-950/20 p-2 rounded border border-rose-200/50">
-                      {editError}
-                    </p>
-                  )}
-
-                  <div className="space-y-3 text-xs">
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-mono font-medium text-zinc-500">Project Title</label>
-                      <input
-                        type="text"
-                        value={editName}
-                        onChange={e => setEditName(e.target.value)}
-                        className="w-full py-1 px-2.5 text-xs rounded border border-zinc-200 dark:border-[#2F2F2F] bg-white dark:bg-[#191919] text-zinc-800 dark:text-[#E0E0E0] focus:ring-1 focus:ring-blue-500 focus:outline-none"
-                      />
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-2">
-                      <div className="space-y-1">
-                        <label className="text-[10px] font-mono font-medium text-zinc-500">Agency Name</label>
-                        <select
-                          value={editAgencyName}
-                          onChange={e => setEditAgencyName(e.target.value)}
-                          className="w-full py-1.5 px-2.5 text-xs rounded border border-zinc-200 dark:border-[#2F2F2F] bg-white dark:bg-[#191919] text-zinc-800 dark:text-[#E0E0E0] focus:outline-none cursor-pointer"
-                        >
-                          <option value="">-- Select Agency --</option>
-                          {agencies.map(a => (
-                            <option key={a.id} value={a.name}>{a.name}</option>
-                          ))}
-                        </select>
-                      </div>
-                      <div className="space-y-1">
-                        <label className="text-[10px] font-mono font-medium text-zinc-500">Brand Client</label>
-                        <input
-                          type="text"
-                          value={editBrandName}
-                          onChange={e => setEditBrandName(e.target.value)}
-                          list="brand-names-list-edit"
-                          className="w-full py-1.5 px-2.5 text-xs rounded border border-zinc-200 dark:border-[#2F2F2F] bg-white dark:bg-[#191919] text-zinc-800 dark:text-[#E0E0E0] focus:outline-none"
-                        />
-                        <datalist id="brand-names-list-edit">
-                          {uniqueBrandNames.map(name => (
-                            <option key={name} value={name} />
-                          ))}
-                        </datalist>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-2">
-                      <div className="space-y-1">
-                        <label className="text-[10px] font-mono font-medium text-zinc-500">Est. Hours</label>
-                        <input
-                          type="number"
-                          value={editEstimatedHours}
-                          onChange={e => setEditEstimatedHours(e.target.value)}
-                          className="w-full py-1 px-2.5 text-xs font-mono rounded border border-zinc-200 dark:border-[#2F2F2F] bg-white dark:bg-[#191919] text-zinc-800 dark:text-[#E0E0E0] focus:outline-none"
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <label className="text-[10px] font-mono font-medium text-zinc-500">Day Rate (£/day)</label>
-                        <input
-                          type="number"
-                          value={editDayRate}
-                          onChange={e => setEditDayRate(e.target.value)}
-                          className="w-full py-1 px-2.5 text-xs font-mono rounded border border-zinc-200 dark:border-[#2F2F2F] bg-white dark:bg-[#191919] text-zinc-800 dark:text-[#E0E0E0] focus:outline-none"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-2">
-                      <div className="space-y-1">
-                        <label className="text-[10px] font-mono font-medium text-zinc-500">Hours in a Day</label>
-                        <select
-                          value={editHoursInDay}
-                          onChange={e => setEditHoursInDay(e.target.value)}
-                          className="w-full py-1.5 px-2 px-2.5 text-xs rounded border border-zinc-200 dark:border-[#2F2F2F] bg-white dark:bg-[#191919] text-zinc-800 dark:text-[#E0E0E0] focus:outline-none cursor-pointer"
-                        >
-                          <option value="6">6 hours</option>
-                          <option value="7">7 hours</option>
-                          <option value="7.5">7.5 hours</option>
-                          <option value="8">8 hours</option>
-                          <option value="8.5">8.5 hours</option>
-                          <option value="9">9 hours</option>
-                        </select>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-2">
-                      <div className="space-y-1">
-                        <label className="text-[10px] font-mono font-medium text-zinc-500">Start Date</label>
-                        <input
-                          type="date"
-                          value={editStartDate}
-                          onChange={e => setEditStartDate(e.target.value)}
-                          className="w-full py-1 px-2.5 text-xs font-mono rounded border border-zinc-200 dark:border-[#2F2F2F] bg-white dark:bg-[#191919] text-zinc-800 dark:text-[#E0E0E0] focus:outline-none"
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <label className="text-[10px] font-mono font-medium text-zinc-500">Deadline</label>
-                        <input
-                          type="date"
-                          value={editEndDate}
-                          onChange={e => setEditEndDate(e.target.value)}
-                          className="w-full py-1 px-2.5 text-xs font-mono rounded border border-zinc-200 dark:border-[#2F2F2F] bg-white dark:bg-[#191919] text-zinc-800 dark:text-[#E0E0E0] focus:outline-none"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-mono font-medium text-zinc-500">Scope Description</label>
-                      <textarea
-                        value={editDescription}
-                        onChange={e => setEditDescription(e.target.value)}
-                        rows={2}
-                        className="w-full py-1 px-2.5 text-xs rounded border border-zinc-200 dark:border-[#2F2F2F] bg-white dark:bg-[#191919] text-zinc-800 dark:text-[#E0E0E0] focus:outline-none"
-                      />
-                    </div>
-
-
-
-                    <div className="flex items-center space-x-2 pt-1">
-                      <input
-                        type="checkbox"
-                        id={`edit-nonbillable-${project.id}`}
-                        checked={editIsNonBillable}
-                        onChange={e => setEditIsNonBillable(e.target.checked)}
-                        className="w-3.5 h-3.5 rounded text-blue-600 focus:ring-blue-500 cursor-pointer"
-                      />
-                      <label htmlFor={`edit-nonbillable-${project.id}`} className="text-[10px] font-mono text-zinc-700 dark:text-gray-300 cursor-pointer">
-                        Non-Billable Project
-                      </label>
-                    </div>
-                  </div>
-
-                  <button
-                    onClick={() => handleSaveProject(project.id)}
-                    className="w-full py-1.5 rounded bg-zinc-900 dark:bg-blue-600 text-white text-[11px] font-bold font-mono hover:bg-zinc-850 cursor-pointer"
-                  >
-                    Save Scope Parameters
-                  </button>
-                </div>
-              );
-            }
-
-            const spent = getProjectStats(project.id);
-            const budgetToUse = project.budget_hours !== undefined && project.budget_hours !== null ? project.budget_hours : project.estimatedHours;
-            const remaining = Math.max(0, budgetToUse - spent);
-            const percent = budgetToUse > 0 ? (spent / budgetToUse) * 100 : 0;
-
-            const rateVal = project.rate ?? 0;
-            const potentialEarnings = budgetToUse * rateVal;
-            const actualEarnings = spent * rateVal;
-
-            let progressColorClass = 'bg-emerald-300 dark:bg-emerald-300/80';
-            if (percent >= 90) {
-              progressColorClass = 'bg-rose-600';
-            } else if (percent >= 75) {
-              progressColorClass = 'bg-orange-600';
-            } else if (percent >= 55) {
-              progressColorClass = 'bg-amber-500';
-            } else if (percent >= 25) {
-              progressColorClass = 'bg-emerald-500';
-            }
-
-            // Date calculations
-            const end = new Date(project.endDate);
-            const start = new Date(project.startDate);
-            const totalDuration = end.getTime() - start.getTime();
-            const elapsed = Date.now() - start.getTime();
-            const timePercent = Math.min(100, Math.max(0, totalDuration > 0 ? (elapsed / totalDuration) * 100 : 0));
-            
-            const agencyDetails = agencies.find(a => a.name.toLowerCase() === project.agencyName?.toLowerCase());
-            const isAgencyExpanded = expandedAgencyProjectId === project.id;
-
+      {/* Project Backlogs Sections (Active Backlog & Done Projects) */}
+      {(() => {
+        const renderProjectCard = (project: Project, isDoneSection: boolean) => {
+          if (editingProjectId === project.id) {
             return (
               <div
                 key={project.id}
-                className="flex flex-col justify-between p-5 rounded-xl border border-zinc-200 dark:border-[#2F2F2F] bg-white dark:bg-[#1F1F1F] shadow-sm hover:border-zinc-300 dark:hover:border-zinc-700 transition-all duration-200"
+                className="flex flex-col justify-between p-5 rounded-xl border border-blue-200 dark:border-blue-900 bg-blue-50/10 dark:bg-blue-950/5 shadow-sm space-y-4 animate-in fade-in duration-200"
               >
-                {/* Header */}
-                <div className="space-y-1">
-                  <div className="flex items-start justify-between">
-                    <div className="space-y-0.5 max-w-[80%]">
-                      {/* Brand and Agency Client Tags */}
-                      {(project.brandName || project.agencyName || project.isNonBillable) && (
-                        <div className="flex flex-wrap items-center gap-1.5 text-[10px] uppercase font-bold font-mono text-blue-600 dark:text-blue-400">
-                          {project.isNonBillable && <span className="bg-zinc-100 dark:bg-zinc-850 text-zinc-600 dark:text-zinc-350 px-1.5 py-0.5 rounded text-[9px] border border-zinc-200 dark:border-[#2F2F2F]">NON-BILLABLE</span>}
-                          {project.isNonBillable && (project.brandName || project.agencyName) && <span className="text-zinc-300 dark:text-zinc-700">•</span>}
-                          {project.agencyName && (
-                            <span className="bg-blue-50 dark:bg-blue-950/20 px-2 py-0.5 rounded border border-blue-150/45 dark:border-blue-900/10 text-[9.5px]">
-                              🏢 {project.agencyName}
-                            </span>
-                          )}
-                          {project.agencyName && project.brandName && <span className="text-zinc-300 dark:text-zinc-700">•</span>}
-                          {project.brandName && <span className="truncate max-w-[120px] text-zinc-600 dark:text-zinc-350">{project.brandName}</span>}
-                        </div>
-                      )}
-                      <h3 className="font-bold text-zinc-900 dark:text-white font-mono tracking-tight hover:underline cursor-pointer pt-0.5">
-                        {project.name}
-                      </h3>
-                    </div>
-                    <div className="flex items-center space-x-1 shrink-0">
-                      <button
-                        onClick={() => handleStartEditProject(project)}
-                        className="p-1 rounded text-zinc-400 hover:text-blue-500 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-950/30 transition-colors cursor-pointer"
-                        title="Edit Project"
-                      >
-                        <Pencil className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        onClick={() => setProjectToDelete(project)}
-                        className="p-1 rounded text-zinc-400 hover:text-rose-500 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30 transition-colors cursor-pointer"
-                        title="Terminate Project"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </div>
-                  {project.description && (
-                    <p className="text-xs text-zinc-500 dark:text-gray-400 leading-normal line-clamp-2 italic pt-1">
-                      "{project.description}"
-                    </p>
-                  )}
-
-                  {/* Interactive Agency Card dropdown */}
-                  {agencyDetails && (
-                    <div className="pt-2">
-                      <button
-                        type="button"
-                        onClick={() => setExpandedAgencyProjectId(isAgencyExpanded ? null : project.id)}
-                        className="text-blue-500 hover:text-blue-650 dark:hover:text-blue-400 flex items-center space-x-1 cursor-pointer font-bold font-mono text-[9.5px]"
-                      >
-                        <Building2 className="w-3 h-3 text-blue-500 shrink-0" />
-                        <span>{isAgencyExpanded ? 'Hide Agency Details' : `Show Agency Details (${project.agencyName})`}</span>
-                        <ChevronRight className={`w-2.5 h-2.5 transition-transform ${isAgencyExpanded ? 'rotate-90' : ''}`} />
-                      </button>
-                      
-                      <AnimatePresence>
-                        {isAgencyExpanded && (
-                          <motion.div
-                            initial={{ opacity: 0, height: 0 }}
-                            animate={{ opacity: 1, height: 'auto' }}
-                            exit={{ opacity: 0, height: 0 }}
-                            className="overflow-hidden mt-1.5 p-2 rounded bg-zinc-50 dark:bg-[#1A1A1A] border border-zinc-150 dark:border-zinc-800/80 space-y-1 text-[10.5px] font-mono text-zinc-600 dark:text-zinc-350"
-                          >
-                            <div className="flex items-start space-x-1.5">
-                              <span className="text-[9.5px] text-zinc-400 font-bold w-14 shrink-0 uppercase">Address:</span>
-                              <span className="text-zinc-800 dark:text-zinc-250 truncate" title={agencyDetails.address}>{agencyDetails.address}</span>
-                            </div>
-                            <div className="flex items-start space-x-1.5">
-                              <span className="text-[9.5px] text-zinc-400 font-bold w-14 shrink-0 uppercase">Website:</span>
-                              <a href={agencyDetails.url} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline truncate">{agencyDetails.url.replace(/^https?:\/\//, '')}</a>
-                            </div>
-                            <div className="flex items-start space-x-1.5">
-                              <span className="text-[9.5px] text-zinc-400 font-bold w-14 shrink-0 uppercase">Contact:</span>
-                              <a href={`mailto:${agencyDetails.contactEmail}`} className="text-zinc-700 dark:text-zinc-250 hover:underline truncate">{agencyDetails.contactEmail}</a>
-                            </div>
-                            <div className="flex items-start space-x-1.5">
-                              <span className="text-[9.5px] text-zinc-400 font-bold w-14 shrink-0 uppercase">Finance:</span>
-                              <a href={`mailto:${agencyDetails.financeEmail}`} className="text-zinc-700 dark:text-zinc-250 hover:underline truncate">{agencyDetails.financeEmail}</a>
-                            </div>
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
-                    </div>
-                  )}
+                <div className="flex items-center justify-between pb-1.5 border-b border-zinc-200 dark:border-[#2F2F2F]">
+                  <span className="text-xs font-bold font-mono text-blue-600 dark:text-blue-400">Edit Project Parameters</span>
+                  <button
+                    type="button"
+                    onClick={() => setEditingProjectId(null)}
+                    className="text-[10px] text-zinc-400 hover:text-zinc-650 font-mono cursor-pointer"
+                  >
+                    Cancel
+                  </button>
                 </div>
 
-                {/* Potential Earnings Backlog & Rate Widget */}
-                {project.isNonBillable ? (
-                  <div className="p-3 bg-zinc-50/50 dark:bg-[#252525]/30 rounded-xl border border-zinc-100 dark:border-[#2F2F2F] my-3 text-center text-xs font-mono text-zinc-400 italic">
-                    🛡️ Non-Revenue Compliant (Effort Ledger Only)
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-2 gap-3 p-3 bg-zinc-50/50 dark:bg-[#252525]/30 rounded-xl border border-zinc-100 dark:border-[#2F2F2F] my-3">
-                    <div className="space-y-0.5">
-                      <p className="text-[9px] uppercase tracking-wider font-mono text-zinc-400 dark:text-gray-500">Day Rate</p>
-                      <p className="text-xs font-bold font-mono text-zinc-950 dark:text-white">
-                        £{project.dayRate ?? (project.rate ? Math.round(project.rate * (project.hoursInDay ?? 8)) : 0)}/day
-                      </p>
-                    </div>
-                    <div className="space-y-0.5">
-                      <p className="text-[9px] uppercase tracking-wider font-mono text-zinc-400 dark:text-gray-500">Actual Earned</p>
-                      <p className="text-xs font-bold font-mono text-emerald-600 dark:text-emerald-400">£{actualEarnings.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
-                    </div>
-                    <div className="col-span-2 border-t border-dashed border-zinc-200/60 dark:border-[#2F2F2F]/60 pt-2 space-y-0.5">
-                      <p className="text-[9px] uppercase tracking-wider font-mono text-zinc-400 dark:text-gray-500">Potential Earnings</p>
-                      <p className="text-xs font-bold font-mono text-amber-600 dark:text-amber-500">£{potentialEarnings.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
-                    </div>
-                  </div>
+                {editError && (
+                  <p className="text-[10px] font-mono text-rose-500 bg-rose-50 dark:bg-rose-950/20 p-2 rounded border border-rose-200/50">
+                    {editError}
+                  </p>
                 )}
 
-                {/* Tracking Progress Bar */}
-                <div className="mb-4 mt-2 space-y-2">
-                  <div className="flex items-center justify-between text-[11px] font-mono">
-                    <span className="text-zinc-400 flex items-center space-x-1">
-                      <Clock className="w-3 h-3 text-zinc-400" />
-                      <span>Burn Rate: <strong className="text-zinc-700 dark:text-zinc-300">{spent}h</strong> / {budgetToUse}h</span>
-                    </span>
-                    <span className="font-bold text-zinc-700 dark:text-zinc-300">{Math.round(percent)}%</span>
-                  </div>
-
-                  {/* Progress Line */}
-                  <div className="w-full bg-zinc-100 dark:bg-[#191919] h-2 rounded-full overflow-hidden border border-zinc-200/50 dark:border-[#2F2F2F]/50">
-                    <div
-                      className={`h-full rounded-full transition-all duration-500 ${progressColorClass}`}
-                      style={{ width: `${Math.min(100, percent)}%` }}
+                <div className="space-y-3 text-xs">
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-mono font-medium text-zinc-500">Project Title</label>
+                    <input
+                      type="text"
+                      value={editName}
+                      onChange={e => setEditName(e.target.value)}
+                      className="w-full py-1 px-2.5 text-xs rounded border border-zinc-200 dark:border-[#2F2F2F] bg-white dark:bg-[#191919] text-zinc-800 dark:text-[#E0E0E0] focus:ring-1 focus:ring-blue-500 focus:outline-none"
                     />
                   </div>
 
-                  {/* Date timelines */}
-                  <div className="grid grid-cols-2 gap-2 pt-1">
-                    <div className="flex items-center space-x-1 text-[10px] text-zinc-400 font-mono">
-                      <Calendar className="w-3 h-3 shrink-0" />
-                      <span className="truncate">Start: {formatDateDMY(project.startDate)}</span>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-mono font-medium text-zinc-500">Agency Name</label>
+                      <select
+                        value={editAgencyName}
+                        onChange={e => setEditAgencyName(e.target.value)}
+                        className="w-full py-1.5 px-2.5 text-xs rounded border border-zinc-200 dark:border-[#2F2F2F] bg-white dark:bg-[#191919] text-zinc-800 dark:text-[#E0E0E0] focus:outline-none cursor-pointer"
+                      >
+                        <option value="">-- Select Agency --</option>
+                        {agencies.map(a => (
+                          <option key={a.id} value={a.name}>{a.name}</option>
+                        ))}
+                      </select>
                     </div>
-                    <div className="flex items-center space-x-1 text-[10px] text-zinc-400 font-mono justify-end">
-                      <span className="truncate">Deadline: {formatDateDMY(project.endDate)}</span>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-mono font-medium text-zinc-500">Brand Client</label>
+                      <input
+                        type="text"
+                        value={editBrandName}
+                        onChange={e => setEditBrandName(e.target.value)}
+                        list="brand-names-list-edit"
+                        className="w-full py-1.5 px-2.5 text-xs rounded border border-zinc-200 dark:border-[#2F2F2F] bg-white dark:bg-[#191919] text-zinc-800 dark:text-[#E0E0E0] focus:outline-none"
+                      />
+                      <datalist id="brand-names-list-edit">
+                        {uniqueBrandNames.map(name => (
+                          <option key={name} value={name} />
+                        ))}
+                      </datalist>
                     </div>
                   </div>
 
-                  {/* Project Timeline Burn Indicator */}
-                  <div className="flex items-center justify-between text-[10px] text-zinc-400 font-mono pt-1">
-                    <span>Project Lifetime Spent:</span>
-                    <span className="text-zinc-700 dark:text-[#E0E0E0]">{Math.round(timePercent)}%</span>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-mono font-medium text-zinc-500">Lifecycle Status</label>
+                      <select
+                        value={editStatus}
+                        onChange={e => setEditStatus(e.target.value as 'active' | 'done')}
+                        className="w-full py-1.5 px-2.5 text-xs rounded border border-zinc-200 dark:border-[#2F2F2F] bg-white dark:bg-[#191919] text-zinc-800 dark:text-[#E0E0E0] focus:outline-none cursor-pointer font-mono"
+                      >
+                        <option value="active">Active (In Log Effort)</option>
+                        <option value="done">Done (Archived)</option>
+                      </select>
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-mono font-medium text-zinc-500">Est. Hours</label>
+                      <input
+                        type="number"
+                        value={editEstimatedHours}
+                        onChange={e => setEditEstimatedHours(e.target.value)}
+                        className="w-full py-1 px-2.5 text-xs font-mono rounded border border-zinc-200 dark:border-[#2F2F2F] bg-white dark:bg-[#191919] text-zinc-800 dark:text-[#E0E0E0] focus:outline-none"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-mono font-medium text-zinc-500">Day Rate (£/day)</label>
+                      <input
+                        type="number"
+                        value={editDayRate}
+                        onChange={e => setEditDayRate(e.target.value)}
+                        className="w-full py-1 px-2.5 text-xs font-mono rounded border border-zinc-200 dark:border-[#2F2F2F] bg-white dark:bg-[#191919] text-zinc-800 dark:text-[#E0E0E0] focus:outline-none"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-mono font-medium text-zinc-500">Hours in a Day</label>
+                      <select
+                        value={editHoursInDay}
+                        onChange={e => setEditHoursInDay(e.target.value)}
+                        className="w-full py-1.5 px-2 px-2.5 text-xs rounded border border-zinc-200 dark:border-[#2F2F2F] bg-white dark:bg-[#191919] text-zinc-800 dark:text-[#E0E0E0] focus:outline-none cursor-pointer"
+                      >
+                        <option value="6">6 hours</option>
+                        <option value="7">7 hours</option>
+                        <option value="7.5">7.5 hours</option>
+                        <option value="8">8 hours</option>
+                        <option value="8.5">8.5 hours</option>
+                        <option value="9">9 hours</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-mono font-medium text-zinc-500">Start Date</label>
+                      <input
+                        type="date"
+                        value={editStartDate}
+                        onChange={e => setEditStartDate(e.target.value)}
+                        className="w-full py-1 px-2.5 text-xs font-mono rounded border border-zinc-200 dark:border-[#2F2F2F] bg-white dark:bg-[#191919] text-zinc-800 dark:text-[#E0E0E0] focus:outline-none"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-mono font-medium text-zinc-500">Deadline</label>
+                      <input
+                        type="date"
+                        value={editEndDate}
+                        onChange={e => setEditEndDate(e.target.value)}
+                        className="w-full py-1 px-2.5 text-xs font-mono rounded border border-zinc-200 dark:border-[#2F2F2F] bg-white dark:bg-[#191919] text-zinc-800 dark:text-[#E0E0E0] focus:outline-none"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-mono font-medium text-zinc-500">Scope Description</label>
+                    <textarea
+                      value={editDescription}
+                      onChange={e => setEditDescription(e.target.value)}
+                      rows={2}
+                      className="w-full py-1 px-2.5 text-xs rounded border border-zinc-200 dark:border-[#2F2F2F] bg-white dark:bg-[#191919] text-zinc-800 dark:text-[#E0E0E0] focus:outline-none"
+                    />
+                  </div>
+
+                  <div className="flex items-center space-x-2 pt-1">
+                    <input
+                      type="checkbox"
+                      id={`edit-nonbillable-${project.id}`}
+                      checked={editIsNonBillable}
+                      onChange={e => setEditIsNonBillable(e.target.checked)}
+                      className="w-3.5 h-3.5 rounded text-blue-600 focus:ring-blue-500 cursor-pointer"
+                    />
+                    <label htmlFor={`edit-nonbillable-${project.id}`} className="text-[10px] font-mono text-zinc-700 dark:text-gray-300 cursor-pointer">
+                      Non-Billable Project
+                    </label>
                   </div>
                 </div>
+
+                <button
+                  onClick={() => handleSaveProject(project.id)}
+                  className="w-full py-1.5 rounded bg-zinc-900 dark:bg-blue-600 text-white text-[11px] font-bold font-mono hover:bg-zinc-850 cursor-pointer"
+                >
+                  Save Scope Parameters
+                </button>
               </div>
             );
-          })
-        )}
-      </div>
+          }
+
+          const spent = getProjectStats(project.id);
+          const budgetToUse = project.budget_hours !== undefined && project.budget_hours !== null ? project.budget_hours : project.estimatedHours;
+          const remaining = Math.max(0, budgetToUse - spent);
+          const percent = budgetToUse > 0 ? (spent / budgetToUse) * 100 : 0;
+
+          const rateVal = project.rate ?? 0;
+          const potentialEarnings = budgetToUse * rateVal;
+          const actualEarnings = spent * rateVal;
+
+          // Color-Coded Burn-Rate Health Badge Status
+          let healthLabel = "Healthy (<70%)";
+          let healthBadgeClass = "bg-emerald-50 text-emerald-700 border-emerald-200/80 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800";
+          let dotClass = "bg-emerald-500";
+          let progressColorClass = "bg-emerald-500 dark:bg-emerald-400";
+
+          if (percent > 90) {
+            healthLabel = "Critical (>90%)";
+            healthBadgeClass = "bg-rose-50 text-rose-700 border-rose-200/80 dark:bg-rose-950/40 dark:text-rose-300 dark:border-rose-800 animate-pulse";
+            dotClass = "bg-rose-500";
+            progressColorClass = "bg-rose-600";
+          } else if (percent >= 70) {
+            healthLabel = "Warning (70-90%)";
+            healthBadgeClass = "bg-amber-50 text-amber-700 border-amber-200/80 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800";
+            dotClass = "bg-amber-500";
+            progressColorClass = "bg-amber-500";
+          }
+
+          // Date calculations
+          const end = new Date(project.endDate);
+          const start = new Date(project.startDate);
+          const totalDuration = end.getTime() - start.getTime();
+          const elapsed = Date.now() - start.getTime();
+          const timePercent = Math.min(100, Math.max(0, totalDuration > 0 ? (elapsed / totalDuration) * 100 : 0));
+          
+          const agencyDetails = agencies.find(a => a.name.toLowerCase() === project.agencyName?.toLowerCase());
+          const isAgencyExpanded = expandedAgencyProjectId === project.id;
+          const isDone = project.status === 'done' || isDoneSection;
+
+          return (
+            <div
+              key={project.id}
+              className={`flex flex-col justify-between p-5 rounded-xl border transition-all duration-200 shadow-sm ${
+                isDone
+                  ? 'border-zinc-200/90 dark:border-zinc-800 bg-zinc-50/50 dark:bg-[#1A1A1A] hover:border-zinc-300 dark:hover:border-zinc-700'
+                  : 'border-zinc-200 dark:border-[#2F2F2F] bg-white dark:bg-[#1F1F1F] hover:border-zinc-300 dark:hover:border-zinc-700'
+              }`}
+            >
+              {/* Header */}
+              <div className="space-y-1">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="space-y-0.5 max-w-[75%]">
+                    {/* Brand, Agency, and Health/Done Badges */}
+                    <div className="flex flex-wrap items-center gap-1.5 text-[10px] uppercase font-bold font-mono">
+                      {isDone ? (
+                        <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-md border text-[9.5px] font-bold bg-zinc-100 text-zinc-700 border-zinc-300 dark:bg-zinc-800 dark:text-zinc-300 dark:border-zinc-700">
+                          <CheckCircle2 className="w-2.5 h-2.5 text-emerald-500" />
+                          <span>DONE</span>
+                        </span>
+                      ) : (
+                        <span className={`inline-flex items-center space-x-1 px-2 py-0.5 rounded-md border text-[9.5px] font-bold ${healthBadgeClass}`}>
+                          <span className={`w-1.5 h-1.5 rounded-full ${dotClass}`} />
+                          <span>{healthLabel}</span>
+                        </span>
+                      )}
+
+                      {project.isNonBillable && (
+                        <span className="bg-zinc-100 dark:bg-zinc-850 text-zinc-600 dark:text-zinc-350 px-1.5 py-0.5 rounded text-[9px] border border-zinc-200 dark:border-[#2F2F2F]">
+                          NON-BILLABLE
+                        </span>
+                      )}
+                      {project.agencyName && (
+                        <span className="bg-blue-50 dark:bg-blue-950/20 text-blue-600 dark:text-blue-400 px-2 py-0.5 rounded border border-blue-150/45 dark:border-blue-900/10 text-[9.5px]">
+                          🏢 {project.agencyName}
+                        </span>
+                      )}
+                      {project.brandName && (
+                        <span className="truncate max-w-[120px] text-zinc-600 dark:text-zinc-350">
+                          {project.brandName}
+                        </span>
+                      )}
+                    </div>
+                    <h3 className="font-bold text-zinc-900 dark:text-white font-mono tracking-tight hover:underline cursor-pointer pt-0.5">
+                      {project.name}
+                    </h3>
+                  </div>
+                  <div className="flex items-center space-x-1 shrink-0">
+                    <button
+                      onClick={() => handleStartEditProject(project)}
+                      className="p-1 rounded text-zinc-400 hover:text-blue-500 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-950/30 transition-colors cursor-pointer"
+                      title="Edit Project"
+                    >
+                      <Pencil className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={() => setProjectToDelete(project)}
+                      className="p-1 rounded text-zinc-400 hover:text-rose-500 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30 transition-colors cursor-pointer"
+                      title="Terminate Project"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+                {project.description && (
+                  <p className="text-xs text-zinc-500 dark:text-gray-400 leading-normal line-clamp-2 italic pt-1">
+                    "{project.description}"
+                  </p>
+                )}
+
+                {/* Interactive Agency Card dropdown */}
+                {agencyDetails && (
+                  <div className="pt-2">
+                    <button
+                      type="button"
+                      onClick={() => setExpandedAgencyProjectId(isAgencyExpanded ? null : project.id)}
+                      className="text-blue-500 hover:text-blue-650 dark:hover:text-blue-400 flex items-center space-x-1 cursor-pointer font-bold font-mono text-[9.5px]"
+                    >
+                      <Building2 className="w-3 h-3 text-blue-500 shrink-0" />
+                      <span>{isAgencyExpanded ? 'Hide Agency Details' : `Show Agency Details (${project.agencyName})`}</span>
+                      <ChevronRight className={`w-2.5 h-2.5 transition-transform ${isAgencyExpanded ? 'rotate-90' : ''}`} />
+                    </button>
+                    
+                    <AnimatePresence>
+                      {isAgencyExpanded && (
+                        <motion.div
+                          initial={{ opacity: 0, height: 0 }}
+                          animate={{ opacity: 1, height: 'auto' }}
+                          exit={{ opacity: 0, height: 0 }}
+                          className="overflow-hidden mt-1.5 p-2 rounded bg-zinc-50 dark:bg-[#1A1A1A] border border-zinc-150 dark:border-zinc-800/80 space-y-1 text-[10.5px] font-mono text-zinc-600 dark:text-zinc-350"
+                        >
+                          <div className="flex items-start space-x-1.5">
+                            <span className="text-[9.5px] text-zinc-400 font-bold w-14 shrink-0 uppercase">Address:</span>
+                            <span className="text-zinc-800 dark:text-zinc-250 truncate" title={agencyDetails.address}>{agencyDetails.address}</span>
+                          </div>
+                          <div className="flex items-start space-x-1.5">
+                            <span className="text-[9.5px] text-zinc-400 font-bold w-14 shrink-0 uppercase">Website:</span>
+                            <a href={agencyDetails.url} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline truncate">{agencyDetails.url.replace(/^https?:\/\//, '')}</a>
+                          </div>
+                          <div className="flex items-start space-x-1.5">
+                            <span className="text-[9.5px] text-zinc-400 font-bold w-14 shrink-0 uppercase">Contact:</span>
+                            <a href={`mailto:${agencyDetails.contactEmail}`} className="text-zinc-700 dark:text-zinc-250 hover:underline truncate">{agencyDetails.contactEmail}</a>
+                          </div>
+                          <div className="flex items-start space-x-1.5">
+                            <span className="text-[9.5px] text-zinc-400 font-bold w-14 shrink-0 uppercase">Finance:</span>
+                            <a href={`mailto:${agencyDetails.financeEmail}`} className="text-zinc-700 dark:text-zinc-250 hover:underline truncate">{agencyDetails.financeEmail}</a>
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </div>
+                )}
+              </div>
+
+              {/* Potential Earnings Backlog & Rate Widget */}
+              {project.isNonBillable ? (
+                <div className="p-3 bg-zinc-50/50 dark:bg-[#252525]/30 rounded-xl border border-zinc-100 dark:border-[#2F2F2F] my-3 text-center text-xs font-mono text-zinc-400 italic">
+                  🛡️ Non-Revenue Compliant (Effort Ledger Only)
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 gap-3 p-3 bg-zinc-50/50 dark:bg-[#252525]/30 rounded-xl border border-zinc-100 dark:border-[#2F2F2F] my-3">
+                  <div className="space-y-0.5">
+                    <p className="text-[9px] uppercase tracking-wider font-mono text-zinc-400 dark:text-gray-500">Day Rate</p>
+                    <p className="text-xs font-bold font-mono text-zinc-950 dark:text-white">
+                      £{project.dayRate ?? (project.rate ? Math.round(project.rate * (project.hoursInDay ?? 8)) : 0)}/day
+                    </p>
+                  </div>
+                  <div className="space-y-0.5">
+                    <p className="text-[9px] uppercase tracking-wider font-mono text-zinc-400 dark:text-gray-500">Actual Earned</p>
+                    <p className="text-xs font-bold font-mono text-emerald-600 dark:text-emerald-400">£{actualEarnings.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+                  </div>
+                  <div className="col-span-2 border-t border-dashed border-zinc-200/60 dark:border-[#2F2F2F]/60 pt-2 space-y-0.5">
+                    <p className="text-[9px] uppercase tracking-wider font-mono text-zinc-400 dark:text-gray-500">Potential Earnings</p>
+                    <p className="text-xs font-bold font-mono text-amber-600 dark:text-amber-500">£{potentialEarnings.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+                  </div>
+                </div>
+              )}
+
+              {/* Tracking Progress Bar */}
+              <div className="mb-2 mt-2 space-y-2">
+                <div className="flex items-center justify-between text-[11px] font-mono">
+                  <span className="text-zinc-400 flex items-center space-x-1">
+                    <Clock className="w-3 h-3 text-zinc-400" />
+                    <span>Burn Rate: <strong className="text-zinc-700 dark:text-zinc-300">{spent}h</strong> / {budgetToUse}h</span>
+                  </span>
+                  <span className="font-bold text-zinc-700 dark:text-zinc-300">{Math.round(percent)}%</span>
+                </div>
+
+                {/* Progress Line */}
+                <div className="w-full bg-zinc-100 dark:bg-[#191919] h-2 rounded-full overflow-hidden border border-zinc-200/50 dark:border-[#2F2F2F]/50">
+                  <div
+                    className={`h-full rounded-full transition-all duration-500 ${isDone ? 'bg-zinc-400 dark:bg-zinc-600' : progressColorClass}`}
+                    style={{ width: `${Math.min(100, percent)}%` }}
+                  />
+                </div>
+
+                {/* Date timelines */}
+                <div className="grid grid-cols-2 gap-2 pt-1">
+                  <div className="flex items-center space-x-1 text-[10px] text-zinc-400 font-mono">
+                    <Calendar className="w-3 h-3 shrink-0" />
+                    <span className="truncate">Start: {formatDateDMY(project.startDate)}</span>
+                  </div>
+                  <div className="flex items-center space-x-1 text-[10px] text-zinc-400 font-mono justify-end">
+                    <span className="truncate">Deadline: {formatDateDMY(project.endDate)}</span>
+                  </div>
+                </div>
+
+                {/* Project Timeline Burn Indicator */}
+                <div className="flex items-center justify-between text-[10px] text-zinc-400 font-mono pt-1">
+                  <span>Project Lifetime Spent:</span>
+                  <span className="text-zinc-700 dark:text-[#E0E0E0]">{Math.round(timePercent)}%</span>
+                </div>
+              </div>
+
+              {/* Flag Done / Reopen Action Footer */}
+              {isDone ? (
+                <div className="pt-3 border-t border-zinc-200/60 dark:border-zinc-800/80 mt-2 flex items-center justify-between gap-2">
+                  <div className="flex items-center space-x-1.5 text-[11px] font-mono text-zinc-500 dark:text-zinc-400">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                    <span className="font-semibold">Completed & Archived</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleToggleProjectDone(project)}
+                    className="py-1 px-3 rounded-lg border border-blue-200 dark:border-blue-900/60 bg-blue-50/80 hover:bg-blue-100 dark:bg-blue-950/30 dark:hover:bg-blue-900/40 text-blue-600 dark:text-blue-400 text-xs font-mono font-bold flex items-center space-x-1.5 transition-all cursor-pointer"
+                    title="Reactivate project and return it to Active backlog and Log Effort screen"
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                    <span>Reopen Project</span>
+                  </button>
+                </div>
+              ) : (
+                <div className="pt-3 border-t border-zinc-150 dark:border-zinc-800/60 mt-2">
+                  <button
+                    type="button"
+                    onClick={() => handleToggleProjectDone(project)}
+                    className="w-full py-1.5 px-3 rounded-lg border border-emerald-300/80 dark:border-emerald-800/80 bg-emerald-50/70 hover:bg-emerald-100 dark:bg-emerald-950/20 dark:hover:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 text-xs font-mono font-bold flex items-center justify-center space-x-1.5 transition-all cursor-pointer shadow-xs"
+                    title="Flag project as Done - moves it to Done section and hides from Log Effort screen"
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                    <span>Flag Project as Done</span>
+                  </button>
+                </div>
+              )}
+            </div>
+          );
+        };
+
+        return (
+          <div className="space-y-8">
+            {/* 1. Active Projects Backlog */}
+            <div className="space-y-4">
+              <div className="flex items-center justify-between pb-2 border-b border-zinc-200 dark:border-[#2F2F2F]">
+                <div className="flex items-center space-x-2">
+                  <h3 className="text-sm font-bold font-mono text-zinc-900 dark:text-white uppercase tracking-wider flex items-center space-x-2">
+                    <span>🚀 Active Projects Backlog</span>
+                    <span className="px-2 py-0.5 text-[10px] rounded-full bg-blue-100 dark:bg-blue-950 text-blue-700 dark:text-blue-300 font-bold">
+                      {activeProjects.length}
+                    </span>
+                  </h3>
+                </div>
+                <span className="text-[11px] font-mono text-zinc-400 dark:text-zinc-500">
+                  Visible in Log Effort Matrix & Form
+                </span>
+              </div>
+
+              {activeProjects.length === 0 ? (
+                <div className="py-10 text-center border-2 border-dashed border-zinc-200 dark:border-[#2F2F2F] rounded-xl">
+                  <span className="text-3xl">📂</span>
+                  <h4 className="text-xs font-bold font-mono text-zinc-700 dark:text-zinc-300 mt-2">Zero Active Projects</h4>
+                  <p className="text-[11px] text-zinc-400 dark:text-gray-500 mt-1">
+                    {projects.length > 0
+                      ? 'All projects are currently marked as Done below. You can reopen any project at any time.'
+                      : 'No tasks to track. Click "Initiate New Project" above to start tracking.'}
+                  </p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {activeProjects.map(project => renderProjectCard(project, false))}
+                </div>
+              )}
+            </div>
+
+            {/* 2. Done / Completed Projects Section */}
+            <div className="pt-2 space-y-4">
+              <div className="flex items-center justify-between p-3.5 rounded-xl border border-zinc-200 dark:border-[#2F2F2F] bg-zinc-50/80 dark:bg-[#1A1A1A]">
+                <div className="flex items-center space-x-3">
+                  <div className="p-2 rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                    <CheckCircle2 className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <div className="flex items-center space-x-2">
+                      <h3 className="text-sm font-bold font-mono text-zinc-900 dark:text-white uppercase tracking-wider">
+                        Completed Projects
+                      </h3>
+                      <span className="px-2 py-0.5 text-[10px] rounded-full bg-zinc-200 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 font-bold font-mono">
+                        {doneProjects.length}
+                      </span>
+                    </div>
+                    <p className="text-[11px] font-mono text-zinc-400 dark:text-zinc-500">
+                      Archived from Log Effort screen. All historical effort & revenue data continue to count towards reporting and timeline audits.
+                    </p>
+                  </div>
+                </div>
+                {doneProjects.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setIsDoneSectionOpen(!isDoneSectionOpen)}
+                    className="px-3 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-[#252525] text-xs font-mono font-bold text-zinc-600 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-white flex items-center space-x-1.5 cursor-pointer shadow-xs"
+                  >
+                    <span>{isDoneSectionOpen ? 'Collapse' : 'Expand'}</span>
+                    <ChevronRight className={`w-3.5 h-3.5 transition-transform duration-200 ${isDoneSectionOpen ? 'rotate-90' : ''}`} />
+                  </button>
+                )}
+              </div>
+
+              {isDoneSectionOpen && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {doneProjects.length === 0 ? (
+                    <div className="col-span-full py-8 text-center border border-dashed border-zinc-200 dark:border-[#2F2F2F] rounded-xl text-zinc-400 text-xs font-mono">
+                      No completed projects yet. Click "Flag Project as Done" on any active project when delivered.
+                    </div>
+                  ) : (
+                    doneProjects.map(project => renderProjectCard(project, true))
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* 🛑 Project Delete Confirmation Modal */}
       <AnimatePresence>

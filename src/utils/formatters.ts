@@ -26,3 +26,29 @@ export function formatDateDMY(dateStr: string | null | undefined): string {
 
   return dateStr;
 }
+
+/**
+ * Calculates billable spend for a project given hours logged
+ */
+export function calculateProjectSpend(project: any | undefined, hours: number): number {
+  if (!project || project.isNonBillable || hours <= 0) return 0;
+  if (project.dayRate && project.dayRate > 0) {
+    const hoursInDay = project.hoursInDay || 7.5;
+    return (hours / hoursInDay) * project.dayRate;
+  }
+  if (project.rate && project.rate > 0) {
+    return hours * project.rate;
+  }
+  return 0;
+}
+
+/**
+ * Formats rate label for project (e.g. £800/d or £100/h)
+ */
+export function getProjectRateLabel(project: any | undefined): string {
+  if (!project) return '';
+  if (project.isNonBillable) return 'Non-billable';
+  if (project.dayRate && project.dayRate > 0) return `£${project.dayRate}/d`;
+  if (project.rate && project.rate > 0) return `£${project.rate}/h`;
+  return '';
+}

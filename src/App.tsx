@@ -24,6 +24,7 @@ import ProjectManager from './components/ProjectManager';
 import TimesheetForm from './components/TimesheetForm';
 import TimesheetList from './components/TimesheetList';
 import WeeklyReport from './components/WeeklyReport';
+import WeeklyTimesheetMatrix from './components/WeeklyTimesheetMatrix';
 
 // Icon imports
 import {
@@ -31,6 +32,7 @@ import {
   Clock,
   FolderOpen,
   FileSpreadsheet,
+  FileText,
   Sun,
   Moon,
   Trash2,
@@ -39,7 +41,6 @@ import {
   HelpCircle,
   RotateCcw,
   X,
-  WifiOff,
   Database,
   ShieldCheck,
   Info,
@@ -49,7 +50,11 @@ import {
   AlertCircle,
   Lock,
   Eye,
-  EyeOff
+  EyeOff,
+  Link,
+  LogIn,
+  KeyRound,
+  AlertTriangle
 } from 'lucide-react';
 
 import { motion, AnimatePresence } from 'motion/react';
@@ -65,6 +70,7 @@ import {
   getAccessToken,
   writeHeaders
 } from './utils/googleAuth';
+import { mergeSheetAndLocalData, isDataEqual } from './utils/syncUtils';
 
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(true);
@@ -110,7 +116,6 @@ export default function App() {
   const [lastDeletedEntry, setLastDeletedEntry] = useState<TimeEntry | null>(null);
   const [showToast, setShowToast] = useState<boolean>(false);
   const [alerts, setAlerts] = useState<BudgetAlert[]>([]);
-  const [showOfflineModal, setShowOfflineModal] = useState<boolean>(false);
 
   // Google Sheets sync states
   const [googleUser, setGoogleUser] = useState<User | null>(null);
@@ -125,6 +130,27 @@ export default function App() {
   const [showSyncInfoModal, setShowSyncInfoModal] = useState<boolean>(false);
   const [customSheetInput, setCustomSheetInput] = useState<string>('');
   const [customSheetError, setCustomSheetError] = useState<string>('');
+  const [reconnectedNotice, setReconnectedNotice] = useState<string | null>(null);
+  const [authErrorMessage, setAuthErrorMessage] = useState<string | null>(null);
+  const [timesheetEntryMode, setTimesheetEntryMode] = useState<'matrix' | 'single'>(() => {
+    const saved = localStorage.getItem('timesheet_entry_mode');
+    return saved === 'single' ? 'single' : 'matrix';
+  });
+
+  const isFullyConnected = Boolean(spreadsheetId && (googleUser || accessToken) && syncingState !== 'error');
+  const isReauthNeeded = syncingState === 'error' || Boolean(spreadsheetId && !googleUser && !accessToken);
+  const isNotConnected = !spreadsheetId && !googleUser && !accessToken && !isReauthNeeded;
+
+  const triggerReconnectedNotice = (msg = 'Google Sheets database reconnected & state synchronized!') => {
+    setReconnectedNotice(msg);
+  };
+
+  useEffect(() => {
+    if (reconnectedNotice) {
+      const timer = setTimeout(() => setReconnectedNotice(null), 6000);
+      return () => clearTimeout(timer);
+    }
+  }, [reconnectedNotice]);
 
   const updateLastSyncedTime = () => {
     const now = new Date().toLocaleString(undefined, {
@@ -166,9 +192,31 @@ export default function App() {
       if (token) {
         setSyncingState('syncing');
         await writeHeaders(token, id);
-        await syncDataToSheet(token, id, projects, entries, agencies);
+        const loaded = await loadDataFromSheet(token, id);
+        let activeProjects = loaded.projects;
+        let activeEntries = loaded.entries;
+        let activeAgencies = loaded.agencies;
+
+        // If the linked custom spreadsheet is empty, seed it once with existing state:
+        if (activeProjects.length === 0 && activeEntries.length === 0 && activeAgencies.length === 0) {
+          activeProjects = projects;
+          activeEntries = entries;
+          activeAgencies = agencies;
+          if (activeProjects.length > 0 || activeEntries.length > 0 || activeAgencies.length > 0) {
+            await syncDataToSheet(token, id, activeProjects, activeEntries, activeAgencies);
+          }
+        }
+
+        setProjects(activeProjects);
+        saveProjects(activeProjects);
+        setEntries(activeEntries);
+        saveEntries(activeEntries);
+        setAgencies(activeAgencies);
+        saveAgencies(activeAgencies);
+
         setSyncingState('synced');
         updateLastSyncedTime();
+        triggerReconnectedNotice('Custom Google Sheet linked & state synchronized!');
         alert("Successfully linked custom spreadsheet! Existing projects, entries, and agencies synced.");
       } else {
         alert("Spreadsheet ID override set successfully! Connecting a Google account will now synchronize directly to this sheet.");
@@ -199,68 +247,34 @@ export default function App() {
         // Fetch latest data from the sheet (source of truth)
         const loaded = await loadDataFromSheet(token, sheetId);
 
-        const localProjects = getProjects();
-        const localEntries = getEntries();
-        const localAgencies = getAgencies();
+        let activeProjects = loaded.projects;
+        let activeEntries = loaded.entries;
+        let activeAgencies = loaded.agencies;
 
-        // Get the last known sync timestamp from local storage (if any)
-        const lastSyncIso = localStorage.getItem('timesheet_recorder_last_synced_iso');
-
-        // Merge projects:
-        // Start with the sheet's current projects as the base, preserving local scope/rate fields if sheet is missing them
-        const mergedProjects = loaded.projects.map(sp => {
-          const lp = localProjects.find(p => p.id === sp.id);
-          if (!lp) return sp;
-          return {
-            ...sp,
-            description: sp.description || lp.description,
-            dayRate: sp.dayRate ?? lp.dayRate,
-            hoursInDay: sp.hoursInDay ?? lp.hoursInDay
-          };
-        });
-        
-        // Find local projects not present on the sheet and retain them
-        localProjects.forEach(localProj => {
-          const existsOnSheet = loaded.projects.some(p => p.id === localProj.id);
-          if (!existsOnSheet) {
-            mergedProjects.push(localProj);
+        // Only if the database sheet is completely blank and newly created, seed initial data once:
+        if (activeProjects.length === 0 && activeEntries.length === 0 && activeAgencies.length === 0) {
+          const localProjects = getProjects();
+          const localEntries = getEntries();
+          const localAgencies = getAgencies();
+          if (localProjects.length > 0 || localEntries.length > 0 || localAgencies.length > 0) {
+            activeProjects = localProjects;
+            activeEntries = localEntries;
+            activeAgencies = localAgencies;
+            await syncDataToSheet(token, sheetId, activeProjects, activeEntries, activeAgencies);
           }
-        });
+        }
 
-        // Merge entries:
-        // Start with the sheet's current entries as the base
-        const mergedEntries = [...loaded.entries];
-
-        // Find local entries not present on the sheet and retain them
-        localEntries.forEach(localEntry => {
-          const existsOnSheet = loaded.entries.some(e => e.id === localEntry.id);
-          if (!existsOnSheet) {
-            mergedEntries.push(localEntry);
-          }
-        });
-
-        // Merge agencies:
-        const mergedAgencies = [...loaded.agencies];
-        localAgencies.forEach(localAgency => {
-          const existsOnSheet = loaded.agencies.some(a => a.id === localAgency.id);
-          if (!existsOnSheet) {
-            mergedAgencies.push(localAgency);
-          }
-        });
-
-        // Sync the unified merged datasets back to the Google Sheet
-        await syncDataToSheet(token, sheetId, mergedProjects, mergedEntries, mergedAgencies);
-
-        // Update local state and storage
-        setProjects(mergedProjects);
-        saveProjects(mergedProjects);
-        setEntries(mergedEntries);
-        saveEntries(mergedEntries);
-        setAgencies(mergedAgencies);
-        saveAgencies(mergedAgencies);
+        // Set state directly from database
+        setProjects(activeProjects);
+        saveProjects(activeProjects);
+        setEntries(activeEntries);
+        saveEntries(activeEntries);
+        setAgencies(activeAgencies);
+        saveAgencies(activeAgencies);
 
         setSyncingState('synced');
         updateLastSyncedTime();
+        triggerReconnectedNotice('Google Sheets Database Connected & State Synchronized');
       } else {
         setSyncingState('error');
       }
@@ -272,20 +286,24 @@ export default function App() {
 
   const handleGoogleLogin = async (useRedirect = false) => {
     setSyncingState('syncing');
+    setAuthErrorMessage(null);
     try {
       const res = await googleSignIn(useRedirect);
       if (res) {
         setGoogleUser(res.user);
         setAccessToken(res.accessToken);
+        setAuthErrorMessage(null);
         await initializeSpreadsheet(res.accessToken, res.user);
       } else {
         if (!useRedirect) {
           setSyncingState('error');
+          setAuthErrorMessage('Google sign-in popup closed or did not return credentials.');
         }
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Login failed:', err);
       setSyncingState('error');
+      setAuthErrorMessage(err?.message || 'Authentication error. Please check browser popups or try redirect login.');
     }
   };
 
@@ -298,6 +316,7 @@ export default function App() {
       setSheetsUrl(null);
       setSyncingState('idle');
       setLastSyncedTime(null);
+      setAuthErrorMessage(null);
       localStorage.removeItem('timesheet_recorder_spreadsheet_id');
       localStorage.removeItem('timesheet_recorder_last_synced_time');
     } catch (err) {
@@ -310,6 +329,7 @@ export default function App() {
     const sheetId = spreadsheetId || localStorage.getItem('timesheet_recorder_spreadsheet_id');
     if (!token || !sheetId) return;
 
+    const wasError = syncingState === 'error';
     setSyncingState('syncing');
     try {
       const projs = projList || projects;
@@ -317,10 +337,20 @@ export default function App() {
       const ags = agList || agencies;
       await syncDataToSheet(token, sheetId, projs, ents, ags);
       setSyncingState('synced');
+      setAuthErrorMessage(null);
       updateLastSyncedTime();
-    } catch (err) {
+      if (wasError) {
+        triggerReconnectedNotice('Database Reconnected — Changes saved to Google Sheets.');
+      }
+    } catch (err: any) {
       console.error('Auto-sync failed:', err);
       setSyncingState('error');
+      const errStr = (err?.message || String(err)).toLowerCase();
+      if (errStr.includes('401') || errStr.includes('unauthenticated') || errStr.includes('invalid credentials') || errStr.includes('token') || errStr.includes('permission')) {
+        setAuthErrorMessage('Google session expired (401 Unauthenticated). Please reconnect your Google account.');
+      } else {
+        setAuthErrorMessage(err?.message || 'Failed to sync timesheets to Google Sheets.');
+      }
     }
   };
 
@@ -334,52 +364,27 @@ export default function App() {
     setSyncingState('syncing');
     try {
       const loaded = await loadDataFromSheet(token, sheetId);
-      const currentLocalProjects = getProjects();
-      const currentLocalEntries = getEntries();
-      const currentLocalAgencies = getAgencies();
 
-      const mergedProjects = loaded.projects.map(sp => {
-        const lp = currentLocalProjects.find(p => p.id === sp.id);
-        if (!lp) return sp;
-        return {
-          ...sp,
-          description: sp.description || lp.description,
-          dayRate: sp.dayRate ?? lp.dayRate,
-          hoursInDay: sp.hoursInDay ?? lp.hoursInDay
-        };
-      });
-      currentLocalProjects.forEach(lp => {
-        if (!mergedProjects.some(p => p.id === lp.id)) {
-          mergedProjects.push(lp);
-        }
-      });
-
-      const mergedEntries = [...loaded.entries];
-      currentLocalEntries.forEach(le => {
-        if (!mergedEntries.some(e => e.id === le.id)) {
-          mergedEntries.push(le);
-        }
-      });
-
-      const mergedAgencies = [...loaded.agencies];
-      currentLocalAgencies.forEach(la => {
-        if (!mergedAgencies.some(a => a.id === la.id)) {
-          mergedAgencies.push(la);
-        }
-      });
-
-      setProjects(mergedProjects);
-      saveProjects(mergedProjects);
-      setEntries(mergedEntries);
-      saveEntries(mergedEntries);
-      setAgencies(mergedAgencies);
-      saveAgencies(mergedAgencies);
+      setProjects(loaded.projects);
+      saveProjects(loaded.projects);
+      setEntries(loaded.entries);
+      saveEntries(loaded.entries);
+      setAgencies(loaded.agencies);
+      saveAgencies(loaded.agencies);
       setSyncingState('synced');
+      setAuthErrorMessage(null);
       updateLastSyncedTime();
+      triggerReconnectedNotice('Database Reconnected & Full State Refreshed!');
     } catch (err: any) {
       console.error('Refresh sync failed:', err);
       setSyncingState('error');
-      alert(`Sync refresh failed. This can happen if your internet connection is down or the spreadsheet has been deleted. Error: ${err.message || err}`);
+      const errStr = (err?.message || String(err)).toLowerCase();
+      if (errStr.includes('401') || errStr.includes('unauthenticated') || errStr.includes('invalid credentials') || errStr.includes('token') || errStr.includes('permission')) {
+        setAuthErrorMessage('Google session expired (401 Unauthenticated). Please reconnect your Google account.');
+      } else {
+        setAuthErrorMessage(err?.message || 'Sync refresh failed.');
+      }
+      alert(`Sync refresh failed. This can happen if your internet connection is down or credentials expired. Error: ${err.message || err}`);
     }
   };
 
@@ -419,10 +424,16 @@ export default function App() {
       (user, token) => {
         setGoogleUser(user);
         setAccessToken(token);
+        setAuthErrorMessage(null);
         initializeSpreadsheet(token, user);
       },
       () => {
         // Silent auth failed/none exists
+        const savedSheetId = localStorage.getItem('timesheet_recorder_spreadsheet_id');
+        if (savedSheetId) {
+          setSyncingState('error');
+          setAuthErrorMessage('Google session expired. Please re-authenticate to resume syncing.');
+        }
       }
     );
   }, []);
@@ -431,55 +442,40 @@ export default function App() {
   useEffect(() => {
     if (!googleUser || !accessToken || !spreadsheetId) return;
 
-    // Poll every 30 seconds to fetch other teammates' changes
+    // Poll every 30 seconds to fetch database updates
     const interval = setInterval(async () => {
       // Only fetch if we are not currently writing/syncing
       if (syncingState === 'idle' || syncingState === 'synced') {
         try {
           const loaded = await loadDataFromSheet(accessToken, spreadsheetId);
-          const currentLocalProjects = getProjects();
-          const currentLocalEntries = getEntries();
-          const currentLocalAgencies = getAgencies();
-
-          const mergedProjects = loaded.projects.map(sp => {
-            const lp = currentLocalProjects.find(p => p.id === sp.id);
-            if (!lp) return sp;
-            return {
-              ...sp,
-              description: sp.description || lp.description,
-              dayRate: sp.dayRate ?? lp.dayRate,
-              hoursInDay: sp.hoursInDay ?? lp.hoursInDay
-            };
-          });
-          currentLocalProjects.forEach(lp => {
-            if (!mergedProjects.some(p => p.id === lp.id)) {
-              mergedProjects.push(lp);
+          setProjects(prevProjects => {
+            if (JSON.stringify(prevProjects) !== JSON.stringify(loaded.projects)) {
+              saveProjects(loaded.projects);
+              return loaded.projects;
             }
+            return prevProjects;
           });
-
-          const mergedEntries = [...loaded.entries];
-          currentLocalEntries.forEach(le => {
-            if (!mergedEntries.some(e => e.id === le.id)) {
-              mergedEntries.push(le);
+          setEntries(prevEntries => {
+            if (JSON.stringify(prevEntries) !== JSON.stringify(loaded.entries)) {
+              saveEntries(loaded.entries);
+              return loaded.entries;
             }
+            return prevEntries;
           });
-
-          const mergedAgencies = [...loaded.agencies];
-          currentLocalAgencies.forEach(la => {
-            if (!mergedAgencies.some(a => a.id === la.id)) {
-              mergedAgencies.push(la);
+          setAgencies(prevAgencies => {
+            if (JSON.stringify(prevAgencies) !== JSON.stringify(loaded.agencies)) {
+              saveAgencies(loaded.agencies);
+              return loaded.agencies;
             }
+            return prevAgencies;
           });
-
-          setProjects(mergedProjects);
-          saveProjects(mergedProjects);
-          setEntries(mergedEntries);
-          saveEntries(mergedEntries);
-          setAgencies(mergedAgencies);
-          saveAgencies(mergedAgencies);
-          updateLastSyncedTime();
-        } catch (err) {
+        } catch (err: any) {
           console.warn('Silent collaboration background reload failed:', err);
+          const errStr = (err?.message || String(err)).toLowerCase();
+          if (errStr.includes('401') || errStr.includes('unauthenticated') || errStr.includes('invalid credentials') || errStr.includes('token') || errStr.includes('permission')) {
+            setSyncingState('error');
+            setAuthErrorMessage('Google session expired. Re-authentication required to resume sync.');
+          }
         }
       }
     }, 30000);
@@ -552,6 +548,7 @@ export default function App() {
       | { type: 'addEntry'; entry: TimeEntry }
       | { type: 'editEntry'; entry: TimeEntry }
       | { type: 'deleteEntry'; entryId: string }
+      | { type: 'batchUpdateEntries'; toAdd: TimeEntry[]; toEdit: TimeEntry[]; toDeleteIds: string[] }
   ) => {
     const token = accessToken || await getAccessToken();
     const sheetId = spreadsheetId || localStorage.getItem('timesheet_recorder_spreadsheet_id');
@@ -562,18 +559,7 @@ export default function App() {
       try {
         // 1. Fetch latest data from sheet to prevent overwriting other users' updates
         const loaded = await loadDataFromSheet(token, sheetId);
-        
-        const localProjs = getProjects();
-        let updatedProjects = loaded.projects.map(sp => {
-          const lp = localProjs.find(p => p.id === sp.id);
-          if (!lp) return sp;
-          return {
-            ...sp,
-            description: sp.description || lp.description,
-            dayRate: sp.dayRate ?? lp.dayRate,
-            hoursInDay: sp.hoursInDay ?? lp.hoursInDay
-          };
-        });
+        let updatedProjects = [...loaded.projects];
         let updatedEntries = [...loaded.entries];
 
         // 2. Apply mutation to the fresh database state
@@ -605,6 +591,33 @@ export default function App() {
           } : e);
         } else if (mutation.type === 'deleteEntry') {
           updatedEntries = updatedEntries.filter(e => e.id !== mutation.entryId);
+        } else if (mutation.type === 'batchUpdateEntries') {
+          const deleteSet = new Set(mutation.toDeleteIds);
+          if (deleteSet.size > 0) {
+            updatedEntries = updatedEntries.filter(e => !deleteSet.has(e.id));
+          }
+          const editMap = new Map(mutation.toEdit.map(e => [e.id, e]));
+          if (editMap.size > 0) {
+            updatedEntries = updatedEntries.map(e => {
+              const edited = editMap.get(e.id);
+              if (edited) {
+                return {
+                  ...edited,
+                  projectName: updatedProjects.find(p => p.id === edited.projectId)?.name || e.projectName || ''
+                };
+              }
+              return e;
+            });
+          }
+          mutation.toAdd.forEach(newEntry => {
+            const entryWithUser = {
+              ...newEntry,
+              loggedByName: newEntry.loggedByName || googleUser?.displayName || 'Anonymous Teammate',
+              loggedByEmail: newEntry.loggedByEmail || googleUser?.email || '',
+              projectName: updatedProjects.find(p => p.id === newEntry.projectId)?.name || ''
+            };
+            updatedEntries.push(entryWithUser);
+          });
         }
 
         // 3. Sync merged data back to Google Sheet
@@ -620,10 +633,16 @@ export default function App() {
         updateLastSyncedTime();
 
         // Run budget alerting if relevant
-        if (mutation.type === 'addEntry') {
+        if (mutation.type === 'addEntry' || mutation.type === 'editEntry') {
           checkBudgetAlerts(mutation.entry.projectId, updatedEntries, updatedProjects);
-        } else if (mutation.type === 'editEntry') {
-          checkBudgetAlerts(mutation.entry.projectId, updatedEntries, updatedProjects);
+        } else if (mutation.type === 'batchUpdateEntries') {
+          const touchedProjectIds = new Set([
+            ...mutation.toAdd.map(e => e.projectId),
+            ...mutation.toEdit.map(e => e.projectId)
+          ]);
+          touchedProjectIds.forEach(pId => {
+            checkBudgetAlerts(pId, updatedEntries, updatedProjects);
+          });
         }
       } catch (err) {
         console.error('Online transaction sync mutation failed:', err);
@@ -661,6 +680,28 @@ export default function App() {
         const updated = entries.filter(e => e.id !== mutation.entryId);
         setEntries(updated);
         saveEntries(updated);
+      } else if (mutation.type === 'batchUpdateEntries') {
+        let updated = [...entries];
+        const deleteSet = new Set(mutation.toDeleteIds);
+        if (deleteSet.size > 0) {
+          updated = updated.filter(e => !deleteSet.has(e.id));
+        }
+        const editMap = new Map(mutation.toEdit.map(e => [e.id, e]));
+        if (editMap.size > 0) {
+          updated = updated.map(e => editMap.get(e.id) || e);
+        }
+        mutation.toAdd.forEach(newEntry => {
+          updated.push(newEntry);
+        });
+        setEntries(updated);
+        saveEntries(updated);
+        const touchedProjectIds = new Set([
+          ...mutation.toAdd.map(e => e.projectId),
+          ...mutation.toEdit.map(e => e.projectId)
+        ]);
+        touchedProjectIds.forEach(pId => {
+          checkBudgetAlerts(pId, updated, projects);
+        });
       }
     }
   };
@@ -668,6 +709,7 @@ export default function App() {
   // Add project handler
   const handleAddProject = async (newProj: Omit<Project, 'id' | 'createdAt'>) => {
     const project: Project = {
+      status: 'active',
       ...newProj,
       id: `proj-${Date.now()}`,
       createdAt: new Date().toISOString()
@@ -760,6 +802,15 @@ export default function App() {
   // Edit timesheet entry
   const handleEditEntry = async (updatedEntry: TimeEntry) => {
     await applyMutation({ type: 'editEntry', entry: updatedEntry });
+  };
+
+  // Batch update timesheet entries (for Matrix grid & quick fill)
+  const handleBatchUpdateEntries = async (params: {
+    toAdd: TimeEntry[];
+    toEdit: TimeEntry[];
+    toDeleteIds: string[];
+  }) => {
+    await applyMutation({ type: 'batchUpdateEntries', ...params });
   };
 
   // Delete timesheet entry
@@ -920,21 +971,19 @@ export default function App() {
         
         {/* Controls Area (moved here from header below) */}
         <div className="absolute bottom-3 right-4 sm:right-6 flex items-center space-x-2 sm:space-x-3 z-20">
-          {/* Offline Mode Indicator Badge */}
-          <button
-            onClick={() => setShowOfflineModal(true)}
-            className="group flex items-center space-x-1.5 text-[10px] sm:text-[11px] font-mono px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-lg bg-emerald-50/90 dark:bg-emerald-950/45 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 border border-emerald-200/80 dark:border-emerald-800/80 text-emerald-800 dark:text-emerald-400 cursor-pointer transition-all hover:scale-105 active:scale-95 shadow-sm"
-            title="Click to learn about Offline Mode"
-          >
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-            <span className="hidden xs:inline">Offline Mode</span>
-            <span className="xs:hidden">Offline</span>
-            <Info className="w-3 h-3 text-emerald-600/70 dark:text-emerald-400/70 group-hover:text-emerald-750 dark:group-hover:text-emerald-350 transition-colors" />
-          </button>
-
           {/* Google Sheets Sync Controller */}
           <div className="flex items-center space-x-1">
-            {googleUser === null ? (
+            {isReauthNeeded ? (
+              <button
+                onClick={() => handleGoogleLogin(false)}
+                className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg border border-rose-300 dark:border-rose-800 bg-rose-50/95 dark:bg-rose-950/60 hover:bg-rose-100 dark:hover:bg-rose-900 text-rose-700 dark:text-rose-300 cursor-pointer text-[11px] sm:text-xs font-mono font-bold transition-all hover:scale-105 active:scale-95 shadow-sm animate-pulse"
+                title="Google session expired. Click to re-authenticate."
+              >
+                <AlertCircle className="w-3.5 h-3.5 text-rose-500" />
+                <span className="hidden sm:inline">⚠️ Re-authenticate</span>
+                <span className="sm:hidden">Reconnect</span>
+              </button>
+            ) : googleUser === null && !accessToken ? (
               <button
                 onClick={() => setShowSyncPanel(true)}
                 className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg border border-zinc-250 dark:border-[#2F2F2F]/85 bg-white/95 dark:bg-[#1A1A1A]/95 hover:bg-zinc-50 dark:hover:bg-[#252525] text-zinc-700 dark:text-[#E0E0E0] cursor-pointer text-[11px] sm:text-xs font-mono font-bold transition-all hover:scale-105 active:scale-95 shadow-sm"
@@ -1074,6 +1123,130 @@ export default function App() {
 
         {/* Tab Body Renderings */}
         <main className="min-h-[400px]">
+          {/* 1-Click Connection Hero Card & Status Banner */}
+          {isReauthNeeded ? (
+            <motion.div
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="mb-6 p-5 sm:p-6 rounded-2xl border-2 border-rose-500/80 dark:border-rose-600 bg-rose-50/95 dark:bg-rose-950/40 shadow-xl print:hidden relative overflow-hidden"
+            >
+              <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-5 relative z-10">
+                <div className="flex items-start space-x-3.5 max-w-2xl">
+                  <div className="p-3 rounded-2xl bg-rose-500/20 text-rose-600 dark:text-rose-400 border border-rose-500/30 shrink-0 mt-0.5">
+                    <AlertTriangle className="w-6 h-6 animate-pulse" />
+                  </div>
+                  <div className="space-y-2">
+                    <div className="flex items-center space-x-2 flex-wrap">
+                      <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-ping" />
+                      <span className="text-sm sm:text-base font-extrabold font-mono text-rose-950 dark:text-rose-100 uppercase tracking-wider">
+                        Google Sheets Disconnected — Re-Authentication Needed
+                      </span>
+                    </div>
+
+                    <p className="text-xs text-rose-900/90 dark:text-rose-200/90 leading-relaxed font-sans">
+                      Your Google authorization session has expired or the connection was interrupted. Real-time sync to your Google Sheets database is paused.
+                    </p>
+
+                    {/* Step-by-Step Guidance */}
+                    <div className="mt-2.5 p-3 rounded-xl bg-white/80 dark:bg-black/40 border border-rose-200/70 dark:border-rose-900/40 text-xs font-mono space-y-1.5 text-zinc-800 dark:text-zinc-200">
+                      <div className="font-bold text-[11px] uppercase tracking-wide text-rose-900 dark:text-rose-300 flex items-center space-x-1.5">
+                        <KeyRound className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400" />
+                        <span>Steps to Restore Connection:</span>
+                      </div>
+                      <ol className="list-decimal list-inside space-y-1 text-[11px] text-zinc-700 dark:text-zinc-300 leading-normal pl-0.5">
+                        <li>
+                          <strong>Click "Reconnect Google (1-Click)"</strong> below to renew your authorization.
+                        </li>
+                        <li>
+                          <strong>Zero data loss:</strong> All pending entries are safely preserved in browser cache and will automatically sync once signed in.
+                        </li>
+                        <li>
+                          If permissions changed or you need a different sheet, click <strong>"Sync Settings"</strong> to update the sheet link.
+                        </li>
+                      </ol>
+                    </div>
+
+                    {authErrorMessage && (
+                      <div className="text-[10px] font-mono text-rose-800/80 dark:text-rose-300/80 pt-0.5">
+                        Status details: <code className="bg-rose-100 dark:bg-rose-900/50 px-1 py-0.5 rounded">{authErrorMessage}</code>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 shrink-0 w-full lg:w-auto">
+                  <button
+                    onClick={() => handleGoogleLogin(false)}
+                    className="px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 active:scale-95 text-white font-mono font-bold text-xs shadow-lg transition-all cursor-pointer flex items-center justify-center space-x-2"
+                  >
+                    <LogIn className="w-4 h-4" />
+                    <span>Reconnect Google (1-Click)</span>
+                  </button>
+                  <button
+                    onClick={() => safeSyncRefresh()}
+                    className="px-3.5 py-2.5 rounded-xl bg-white dark:bg-zinc-800 hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 border border-zinc-200 dark:border-zinc-700 font-mono font-bold text-xs transition-all cursor-pointer flex items-center justify-center space-x-1.5"
+                    title="Retry background synchronization"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${syncingState === 'syncing' ? 'animate-spin' : ''}`} />
+                    <span>Retry Sync</span>
+                  </button>
+                  <button
+                    onClick={() => setShowSyncPanel(true)}
+                    className="px-3.5 py-2.5 rounded-xl bg-white/80 dark:bg-zinc-850 hover:bg-white dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700 font-mono font-bold text-xs transition-all cursor-pointer flex items-center justify-center space-x-1.5"
+                    title="Configure Google Sheets integration settings"
+                  >
+                    <Link className="w-3.5 h-3.5" />
+                    <span>Sync Settings</span>
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          ) : isNotConnected ? (
+            <motion.div
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="mb-6 p-5 rounded-2xl border-2 border-amber-300 dark:border-amber-800/80 bg-gradient-to-r from-amber-500/15 via-amber-500/5 to-orange-500/15 dark:from-amber-950/40 dark:via-amber-950/20 dark:to-orange-950/40 shadow-xl print:hidden relative overflow-hidden"
+            >
+              <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 relative z-10">
+                <div className="flex items-start space-x-3.5">
+                  <div className="p-3 rounded-2xl bg-amber-500/20 text-amber-600 dark:text-amber-400 border border-amber-400/30 shrink-0 mt-0.5">
+                    <Database className="w-6 h-6 animate-pulse" />
+                  </div>
+                  <div className="space-y-1">
+                    <div className="flex items-center space-x-2">
+                      <span className="w-2.5 h-2.5 rounded-full bg-amber-500 animate-ping" />
+                      <span className="text-sm sm:text-base font-extrabold font-mono text-amber-950 dark:text-amber-100 uppercase tracking-wider">
+                        1-Click Google Sheets Database Setup
+                      </span>
+                    </div>
+                    <p className="text-xs text-amber-900/90 dark:text-amber-200/90 leading-relaxed font-sans max-w-2xl">
+                      Logging hours requires an active Google Sheets database connection to sync timesheets in real-time with your team and eliminate data loss.
+                    </p>
+                    <div className="pt-1 text-[11px] font-mono text-amber-950/80 dark:text-amber-300/80">
+                      <strong>Quick Setup:</strong> Click "Connect Google Sheets" to authorize with 1-click. A structured team sheet will be linked automatically.
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center flex-wrap gap-2.5 shrink-0 w-full md:w-auto">
+                  <button
+                    onClick={() => handleGoogleLogin(false)}
+                    className="flex-1 md:flex-initial px-4 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 active:scale-95 text-white font-mono font-bold text-xs shadow-lg transition-all cursor-pointer flex items-center justify-center space-x-2"
+                  >
+                    <Database className="w-4 h-4" />
+                    <span>Connect Google Sheets (1-Click)</span>
+                  </button>
+                  <button
+                    onClick={() => setShowSyncPanel(true)}
+                    className="flex-1 md:flex-initial px-3.5 py-2.5 rounded-xl bg-white/90 dark:bg-zinc-800/90 hover:bg-white dark:hover:bg-zinc-800 text-zinc-800 dark:text-zinc-200 border border-zinc-200 dark:border-zinc-700 font-mono font-bold text-xs transition-all cursor-pointer flex items-center justify-center space-x-1.5"
+                  >
+                    <Link className="w-3.5 h-3.5" />
+                    <span>Paste Sheet Link</span>
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          ) : null}
           {/* Active Budget Alerts */}
           {alerts.filter(a => !a.dismissed).length > 0 && (
             <div className="mb-6 space-y-2">
@@ -1103,14 +1276,87 @@ export default function App() {
 
           {activeTab === 'timesheet' && (
             <div className="space-y-6">
-              {/* Full Width Log Effort Ledger first */}
+              {/* Timesheet Entry Mode Switcher (Matches user screenshot) */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 sm:px-4 sm:py-3 rounded-2xl border border-zinc-200/90 dark:border-zinc-800 bg-white/80 dark:bg-zinc-900/80 shadow-sm print:hidden">
+                <div className="text-xs font-mono font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
+                  TIMESHEET ENTRY MODE:
+                </div>
+                <div className="flex items-center space-x-2">
+                  <button
+                    onClick={() => {
+                      setTimesheetEntryMode('single');
+                      localStorage.setItem('timesheet_entry_mode', 'single');
+                    }}
+                    className={`flex items-center space-x-2 px-3.5 py-1.5 rounded-xl font-mono text-xs font-bold transition-all cursor-pointer ${
+                      timesheetEntryMode === 'single'
+                        ? 'bg-orange-500 hover:bg-orange-600 text-white shadow-sm'
+                        : 'bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300'
+                    }`}
+                  >
+                    <FileText className="w-3.5 h-3.5" />
+                    <span>Single Entry Form</span>
+                  </button>
+                  <button
+                    onClick={() => {
+                      setTimesheetEntryMode('matrix');
+                      localStorage.setItem('timesheet_entry_mode', 'matrix');
+                    }}
+                    className={`flex items-center space-x-2 px-3.5 py-1.5 rounded-xl font-mono text-xs font-bold transition-all cursor-pointer ${
+                      timesheetEntryMode === 'matrix'
+                        ? 'bg-orange-500 hover:bg-orange-600 text-white shadow-sm'
+                        : 'bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300'
+                    }`}
+                  >
+                    <Calendar className="w-3.5 h-3.5" />
+                    <span>Monday–Sunday Matrix</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Active Entry Component */}
               <div className="print:hidden">
-                <TimesheetForm
-                  projects={projects}
-                  onAddEntry={handleAddEntry}
-                  selectedDate={selectedDate}
-                  setSelectedDate={setSelectedDate}
-                />
+                {timesheetEntryMode === 'matrix' ? (
+                  <WeeklyTimesheetMatrix
+                    projects={projects}
+                    entries={entries}
+                    onBatchUpdateEntries={handleBatchUpdateEntries}
+                    isConnected={isFullyConnected}
+                    isReauthNeeded={isReauthNeeded}
+                    onConnectDatabase={() => {
+                      if (isReauthNeeded) {
+                        handleGoogleLogin(false);
+                      } else {
+                        setShowSyncPanel(true);
+                        if (!googleUser && !accessToken) {
+                          handleGoogleLogin(false);
+                        }
+                      }
+                    }}
+                    currentUserEmail={googleUser?.email || null}
+                    currentUserName={googleUser?.displayName || null}
+                    selectedDate={selectedDate}
+                    onSelectDate={setSelectedDate}
+                  />
+                ) : (
+                  <TimesheetForm
+                    projects={projects}
+                    onAddEntry={handleAddEntry}
+                    selectedDate={selectedDate}
+                    setSelectedDate={setSelectedDate}
+                    isConnected={isFullyConnected}
+                    isReauthNeeded={isReauthNeeded}
+                    onConnectDatabase={() => {
+                      if (isReauthNeeded) {
+                        handleGoogleLogin(false);
+                      } else {
+                        setShowSyncPanel(true);
+                        if (!googleUser && !accessToken) {
+                          handleGoogleLogin(false);
+                        }
+                      }
+                    }}
+                  />
+                )}
               </div>
               
               {/* Timesheet list below */}
@@ -1213,127 +1459,43 @@ export default function App() {
           )}
         </AnimatePresence>
 
-        {/* Offline Mode Details Modal */}
+        {/* Reconnected Toast Notification */}
         <AnimatePresence>
-          {showOfflineModal && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-              {/* Backdrop */}
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                onClick={() => setShowOfflineModal(false)}
-                className="absolute inset-0 bg-zinc-950/60 dark:bg-black/75 backdrop-blur-md"
-              />
-
-              {/* Modal Content Card */}
-              <motion.div
-                initial={{ opacity: 0, scale: 0.95, y: 15 }}
-                animate={{ opacity: 1, scale: 1, y: 0 }}
-                exit={{ opacity: 0, scale: 0.95, y: 15 }}
-                transition={{ type: "spring", duration: 0.4, bounce: 0.15 }}
-                className="relative bg-white dark:bg-[#1A1A1A] border border-zinc-200 dark:border-[#2D2D2D] rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden z-10 font-sans text-zinc-800 dark:text-[#E0E0E0] p-6 space-y-5"
-              >
-                {/* Header */}
-                <div className="flex items-start justify-between">
-                  <div className="flex items-center space-x-3">
-                    <div className="p-2.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/30 text-emerald-600 dark:text-emerald-400 border border-emerald-100 dark:border-emerald-900/30">
-                      <WifiOff className="w-5 h-5" />
-                    </div>
-                    <div>
-                      <h3 className="text-base font-bold font-mono text-zinc-900 dark:text-white uppercase tracking-wider">
-                        Offline Protocol Mode
-                      </h3>
-                      <p className="text-[11px] font-mono text-zinc-400 dark:text-zinc-500 uppercase">
-                        100% Local-First Architecture
-                      </p>
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => setShowOfflineModal(false)}
-                    className="p-1.5 rounded-lg text-zinc-400 hover:text-zinc-650 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-[#252525] transition-colors cursor-pointer"
-                    title="Close Dialog"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
+          {reconnectedNotice && (
+            <motion.div
+              initial={{ opacity: 0, y: 50, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 20, scale: 0.95 }}
+              transition={{ duration: 0.25 }}
+              className="fixed bottom-6 left-6 z-50 flex items-center justify-between p-4 rounded-2xl border border-emerald-300 dark:border-emerald-800/80 bg-emerald-50/95 dark:bg-[#112419]/95 text-emerald-950 dark:text-emerald-100 shadow-2xl max-w-md w-[calc(100vw-3rem)] sm:w-96 font-mono text-xs backdrop-blur-md print:hidden"
+            >
+              <div className="flex items-start space-x-3 pr-2">
+                <div className="p-2 rounded-xl bg-emerald-100 dark:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 shrink-0">
+                  <Database className="w-5 h-5 animate-pulse" />
                 </div>
-
-                {/* Body Explanation */}
-                <div className="space-y-4 text-xs leading-relaxed text-zinc-600 dark:text-zinc-300">
-                  <p>
-                    Your <strong className="text-zinc-900 dark:text-white">Timesheet Recorder</strong> operates under an uncompromising, privacy-respecting offline directive. No server, no APIs, no tracking cookies.
-                  </p>
-
-                  <div className="space-y-3.5 pt-1">
-                    {/* Key 1: LocalStorage */}
-                    <div className="flex items-start space-x-3">
-                      <div className="p-1.5 rounded-lg bg-blue-50 dark:bg-blue-950/20 text-blue-600 dark:text-blue-400 mt-0.5 border border-blue-100 dark:border-blue-900/10 shrink-0">
-                        <Database className="w-3.5 h-3.5" />
-                      </div>
-                      <div className="space-y-0.5">
-                        <h4 className="font-bold font-mono text-[11px] text-zinc-800 dark:text-zinc-200 uppercase tracking-wide">
-                          Client-Side Database Storage
-                        </h4>
-                        <p className="text-[11px] text-zinc-500 dark:text-zinc-400 leading-normal">
-                          All logged timesheets, project configurations, hourly rates, tags, and caffeine stats are written directly to your web browser's physical storage memory (<code className="font-mono bg-zinc-100 dark:bg-[#252525] px-1 py-0.5 rounded text-[10px]">localStorage</code>).
-                        </p>
-                      </div>
-                    </div>
-
-                    {/* Key 2: Absolute Privacy */}
-                    <div className="flex items-start space-x-3">
-                      <div className="p-1.5 rounded-lg bg-purple-50 dark:bg-purple-950/20 text-purple-600 dark:text-purple-400 mt-0.5 border border-purple-100 dark:border-purple-900/10 shrink-0">
-                        <ShieldCheck className="w-3.5 h-3.5" />
-                      </div>
-                      <div className="space-y-0.5">
-                        <h4 className="font-bold font-mono text-[11px] text-zinc-800 dark:text-zinc-200 uppercase tracking-wide">
-                          Structurally Guaranteed Privacy
-                        </h4>
-                        <p className="text-[11px] text-zinc-500 dark:text-zinc-400 leading-normal">
-                          Your records never leave this machine. No analytical pings, zero tracking agents, and no external servers can access or read what you write.
-                        </p>
-                      </div>
-                    </div>
-
-                    {/* Key 3: Instantaneous Speed */}
-                    <div className="flex items-start space-x-3">
-                      <div className="p-1.5 rounded-lg bg-amber-50 dark:bg-amber-950/20 text-amber-600 dark:text-amber-400 mt-0.5 border border-amber-100 dark:border-amber-900/10 shrink-0">
-                        <Sparkles className="w-3.5 h-3.5" />
-                      </div>
-                      <div className="space-y-0.5">
-                        <h4 className="font-bold font-mono text-[11px] text-zinc-800 dark:text-zinc-200 uppercase tracking-wide">
-                          Zero Latency Execution
-                        </h4>
-                        <p className="text-[11px] text-zinc-500 dark:text-zinc-400 leading-normal">
-                          Edits, additions, and metric compilations execute in real-time, completely offline. The application remains fully functional even in deep signal dead zones.
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Warning / Caveat Banner */}
-                  <div className="p-3 bg-amber-500/5 dark:bg-amber-500/10 border border-amber-500/20 dark:border-amber-500/20 rounded-xl space-y-1.5">
-                    <div className="flex items-center space-x-1.5 text-amber-700 dark:text-amber-400">
-                      <AlertOctagon className="w-3.5 h-3.5" />
-                      <h5 className="font-bold font-mono text-[10px] uppercase tracking-wider">Compliance Advisory</h5>
-                    </div>
-                    <p className="text-[10.5px] text-amber-700/85 dark:text-amber-400/85 leading-relaxed">
-                      Clearing your browser's site cookies or application storage cache will wipe your saved timesheets. To prevent data loss, we strongly recommend syncing your account with <strong className="text-amber-800 dark:text-amber-300">Google Sheets</strong> to back up your records in real-time. You can also print or capture your <strong className="text-amber-800 dark:text-amber-300">Weekly Reports</strong> regularly to preserve evidence of your corporate service.
+                <div className="space-y-1">
+                  <div className="flex items-center space-x-1.5">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
+                    <p className="font-extrabold text-emerald-900 dark:text-emerald-200 uppercase tracking-wider text-[11px]">
+                      Database Reconnected
                     </p>
                   </div>
+                  <p className="text-emerald-800 dark:text-emerald-300 text-[11px] leading-relaxed">
+                    {reconnectedNotice}
+                  </p>
                 </div>
-
-                {/* Footer Controls */}
-                <div className="flex justify-end pt-2">
-                  <button
-                    onClick={() => setShowOfflineModal(false)}
-                    className="px-4 py-2 rounded-xl bg-zinc-900 dark:bg-zinc-100 hover:bg-zinc-800 dark:hover:bg-white text-white dark:text-zinc-900 font-bold text-xs font-mono transition-all cursor-pointer shadow-md active:scale-95 hover:shadow-lg"
-                  >
-                    Acknowledge Directive
-                  </button>
-                </div>
-              </motion.div>
-            </div>
+              </div>
+              
+              <div className="flex items-center shrink-0 border-l border-emerald-200 dark:border-emerald-800/60 pl-3">
+                <button
+                  onClick={() => setReconnectedNotice(null)}
+                  className="p-1.5 rounded-lg text-emerald-700 dark:text-emerald-300 hover:text-emerald-950 dark:hover:text-emerald-100 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 transition-colors cursor-pointer"
+                  title="Dismiss Reconnected Notification"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </motion.div>
           )}
         </AnimatePresence>
 
@@ -1356,10 +1518,10 @@ export default function App() {
                     </div>
                     <div>
                       <h3 className="font-bold text-sm text-zinc-950 dark:text-white font-mono">
-                        Google Sheets Cloud Sync
+                        Google Sheets Cloud Database
                       </h3>
                       <p className="text-[11px] text-zinc-500 dark:text-zinc-400 font-mono">
-                        Real-time spreadsheet synchronization
+                        Mandatory live team database connection
                       </p>
                     </div>
                   </div>
@@ -1376,6 +1538,17 @@ export default function App() {
                 <div className="space-y-4 text-xs">
                   {!googleUser ? (
                     <div className="space-y-4">
+                      {/* Database Guard Notice */}
+                      <div className="p-3.5 bg-amber-500/10 border border-amber-500/20 rounded-xl text-amber-900 dark:text-amber-200 font-mono space-y-1">
+                        <div className="flex items-center space-x-1.5">
+                          <Lock className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+                          <span className="font-bold text-[11px] uppercase tracking-wide">Database Guard Active</span>
+                        </div>
+                        <p className="text-[10.5px] text-amber-800 dark:text-amber-300 leading-relaxed font-sans">
+                          Logging time entries requires an active Google Sheets database connection to prevent unbacked logs and guarantee team data integrity.
+                        </p>
+                      </div>
+
                       {/* Step 1: Link Shared Spreadsheet */}
                       <div className="p-4 bg-zinc-50 dark:bg-[#1E1E1E] border border-zinc-200 dark:border-[#2D2D2D] rounded-xl space-y-3">
                         <div className="flex items-center space-x-2">
@@ -1388,7 +1561,7 @@ export default function App() {
                         </div>
                         
                         <p className="text-[11px] text-zinc-500 dark:text-zinc-400 leading-relaxed font-mono">
-                          If your Team Lead shared a Google Sheet with you, paste its URL or ID below so your timesheets sync directly into it. Otherwise, we will automatically create one in your Drive.
+                          If your Team Lead shared a Google Sheet with you, paste its URL or ID below to join the team database. Otherwise, we will automatically create one in your Drive.
                         </p>
 
                         <form onSubmit={handleConnectCustomSheet} className="flex gap-1.5">
@@ -1432,7 +1605,7 @@ export default function App() {
                         </div>
 
                         <p className="text-[11px] text-zinc-500 dark:text-zinc-400 leading-relaxed font-mono">
-                          Connect your Google Account to grant write access to sheets and enable real-time backup.
+                          Connect your Google Account. Existing database records and local entries will be merged safely without wiping any data.
                         </p>
 
                         <div className="space-y-2.5">
@@ -1523,10 +1696,10 @@ export default function App() {
                           <div className="p-2.5 bg-rose-500/5 border border-rose-500/20 rounded-lg space-y-1">
                             <p className="text-[10px] text-rose-600 dark:text-rose-400 leading-normal font-mono font-bold flex items-center gap-1">
                               <AlertOctagon className="w-3 h-3 shrink-0" />
-                              <span>Sync credentials expired or network offline.</span>
+                              <span>Database connection paused or credentials expired.</span>
                             </p>
                             <p className="text-[9.5px] text-zinc-500 dark:text-zinc-400 leading-normal font-mono">
-                              Click <strong className="text-blue-600 dark:text-blue-400">Reconnect</strong> to authenticate again, or <strong className="text-emerald-600 dark:text-emerald-400">Sync Now</strong> to retry.
+                              Click <strong className="text-blue-600 dark:text-blue-400">Reconnect</strong> to authenticate again, or <strong className="text-emerald-600 dark:text-emerald-400">Sync Now</strong> to retry. No data will be wiped.
                             </p>
                           </div>
                         )}
@@ -1655,10 +1828,10 @@ export default function App() {
                     </div>
                     <div>
                       <h3 className="font-bold text-sm text-zinc-950 dark:text-white font-mono">
-                        Google Sheets Cloud Sync
+                        Google Sheets Cloud Database
                       </h3>
                       <p className="text-[11px] text-zinc-500 dark:text-zinc-400 font-mono">
-                        How your cloud database works
+                        How team synchronization works
                       </p>
                     </div>
                   </div>
@@ -1681,10 +1854,10 @@ export default function App() {
                       </div>
                       <div className="space-y-0.5">
                         <h4 className="font-bold font-mono text-zinc-900 dark:text-zinc-100">
-                          Secure Cloud Integration
+                          Mandatory Database Connection
                         </h4>
                         <p className="text-zinc-500 dark:text-zinc-400 leading-relaxed">
-                          By linking your Google account, the app automatically provisions a spreadsheet called <span className="font-bold text-zinc-750 dark:text-zinc-350">"Timesheet Recorder Database"</span> directly inside your Google Drive. No server hosts your records; everything stays securely in your personal Google account.
+                          To guarantee data integrity and multi-user sync, logging time entries requires an active Google Sheets database connection.
                         </p>
                       </div>
                     </div>
@@ -1696,25 +1869,25 @@ export default function App() {
                       </div>
                       <div className="space-y-0.5">
                         <h4 className="font-bold font-mono text-zinc-900 dark:text-zinc-100">
-                          Offline-First Protection
+                          Non-Destructive State Merging
                         </h4>
                         <p className="text-zinc-500 dark:text-zinc-400 leading-relaxed">
-                          Your records continue to save instantly inside your web browser's local cache. If your internet drops or you are working in remote spots, the app operates uninterrupted.
+                          When joining a team sheet or logging in for the first time, existing sheet entries and local state are automatically combined. No records are ever wiped or lost.
                         </p>
                       </div>
                     </div>
 
                     {/* Item 3 */}
                     <div className="flex gap-3">
-                      <div className="p-1.5 h-fit rounded-lg bg-amber-50 dark:bg-amber-950/20 text-amber-500 border border-amber-100 dark:border-amber-900/15 mt-0.5">
+                      <div className="p-1.5 rounded-lg bg-amber-50 dark:bg-amber-950/20 text-amber-500 border border-amber-100 dark:border-amber-900/15 mt-0.5">
                         <RefreshCw className="w-4 h-4" />
                       </div>
                       <div className="space-y-0.5">
                         <h4 className="font-bold font-mono text-zinc-900 dark:text-zinc-100">
-                          Live Real-time Syncing
+                          30-Second Silent Team Synchronization
                         </h4>
                         <p className="text-zinc-500 dark:text-zinc-400 leading-relaxed">
-                          Whenever you add a timesheet, create a new project, or log cup counts, the app debounces and pushes updates up to Google Sheets within 1.5 seconds. Changes synchronize smoothly.
+                          The app background-polls the Google Sheet every 30 seconds to fetch teammate updates without disturbing your current form edits or triggering unnecessary re-renders.
                         </p>
                       </div>
                     </div>
@@ -1726,10 +1899,10 @@ export default function App() {
                       </div>
                       <div className="space-y-0.5">
                         <h4 className="font-bold font-mono text-zinc-900 dark:text-zinc-100">
-                          Cross-Device Restore
+                          Seamless Reconnect
                         </h4>
                         <p className="text-zinc-500 dark:text-zinc-400 leading-relaxed">
-                          Switched browsers or cleared your cookies? Simply log in with Google, open the Sync Panel status badge, and select <span className="font-bold text-zinc-750 dark:text-zinc-350">"Force Restore"</span>. This grabs all records from your Drive sheet and fully restores your workspace in a single click!
+                          If authentication tokens expire or your connection drops, simply click <span className="font-bold text-zinc-750 dark:text-zinc-350">"Reconnect"</span> in the Sync Panel to refresh authorization and synchronize all pending changes instantly.
                         </p>
                       </div>
                     </div>
